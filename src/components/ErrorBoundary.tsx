@@ -30,7 +30,7 @@ export class ErrorBoundary extends Component<Props, State> {
         if (this.state.error?.message) {
           const parsed = JSON.parse(this.state.error.message);
           if (parsed.error) {
-            errorMessage = `Firestore Error: ${parsed.error} (${parsed.operationType} on ${parsed.path})`;
+            errorMessage = `Database Error: ${parsed.error} (${parsed.operationType} on ${parsed.path})`;
           }
         }
       } catch (e) {

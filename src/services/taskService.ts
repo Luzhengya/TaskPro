@@ -1,18 +1,4 @@
-import { 
-  collection, 
-  doc, 
-  addDoc, 
-  updateDoc, 
-  deleteDoc, 
-  onSnapshot, 
-  getDocs,
-  query, 
-  where, 
-  serverTimestamp,
-  getDocFromServer,
-  writeBatch
-} from 'firebase/firestore';
-import { db, auth } from '../firebase';
+import { db, auth } from '../cloudbase';
 import { ParentTask, SubTask, TaskTemplate, TemplateItem, UserSettings, DailyReportSnapshot } from '../types';
 
 export enum OperationType {
@@ -24,48 +10,83 @@ export enum OperationType {
   WRITE = 'write',
 }
 
-interface FirestoreErrorInfo {
+interface DbErrorInfo {
   error: string;
   operationType: OperationType;
   path: string | null;
   authInfo: {
     userId: string | undefined;
     email: string | null | undefined;
-    emailVerified: boolean | undefined;
-    isAnonymous: boolean | undefined;
-    tenantId: string | null | undefined;
-    providerInfo: {
-      providerId: string;
-      displayName: string | null;
-      email: string | null;
-      photoUrl: string | null;
-    }[];
+    loginType: string | null | undefined;
+    username: string | null | undefined;
   }
 }
 
-function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null, shouldThrow = true) {
-  const errInfo: FirestoreErrorInfo = {
+function handleDbError(error: unknown, operationType: OperationType, path: string | null, shouldThrow = true) {
+  const errInfo: DbErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
       userId: auth.currentUser?.uid,
       email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData.map(provider => ({
-        providerId: provider.providerId,
-        displayName: provider.displayName,
-        email: provider.email,
-        photoUrl: provider.photoURL
-      })) || []
+      loginType: auth.currentUser?.loginType,
+      username: auth.currentUser?.username,
     },
     operationType,
     path
   }
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  console.error('CloudBase DB Error: ', JSON.stringify(errInfo));
   if (shouldThrow) {
     throw new Error(JSON.stringify(errInfo));
   }
+}
+
+// ============================================================
+// CloudBase データベースのヘルパー
+//  - Firestore の doc.id は CloudBase では `_id`。読み出し時に id へマップする。
+//  - get() の既定取得件数は 20 件のため limit を引き上げる。
+// ============================================================
+const READ_LIMIT = 1000;
+
+/** CloudBase ドキュメント（_id）をアプリのモデル（id）へ変換する。 */
+function mapDoc<T>(d: any): T {
+  const { _id, ...rest } = d || {};
+  return { ...rest, id: _id } as T;
+}
+
+/** order 昇順 → created_at 昇順の比較関数（既存の並び順を踏襲）。 */
+function orderSort(a: any, b: any): number {
+  return (a.order ?? 0) - (b.order ?? 0) ||
+    new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+}
+
+/** owner_id（＋追加条件）で所有ドキュメントを取得する。 */
+async function getOwnedDocs(collName: string, extra: Record<string, any> = {}): Promise<any[]> {
+  const owner = auth.currentUser?.uid;
+  const res = await db.collection(collName).where({ owner_id: owner, ...extra }).limit(READ_LIMIT).get();
+  return (res.data as any[]) || [];
+}
+
+/** owner_id（＋追加条件）の所有ドキュメントをリアルタイム監視する。 */
+function watchOwnedDocs<T>(
+  collName: string,
+  extra: Record<string, any>,
+  callback: (rows: T[]) => void,
+  options: { sort?: boolean } = {},
+): () => void {
+  const owner = auth.currentUser?.uid;
+  if (!owner) return () => {};
+  const watcher = db.collection(collName)
+    .where({ owner_id: owner, ...extra })
+    .limit(READ_LIMIT)
+    .watch({
+      onChange: (snapshot: any) => {
+        const rows = ((snapshot?.docs as any[]) || []).map((d) => mapDoc<T>(d));
+        if (options.sort !== false) rows.sort(orderSort);
+        callback(rows);
+      },
+      onError: (err: any) => handleDbError(err, OperationType.LIST, collName, false),
+    });
+  return () => watcher.close();
 }
 
 
@@ -354,11 +375,9 @@ export const taskService = {
   async testConnection() {
     if (this.isGuest) return;
     try {
-      await getDocFromServer(doc(db, 'test', 'connection'));
+      await db.collection('parent_tasks').limit(1).get();
     } catch (error) {
-      if(error instanceof Error && error.message.includes('the client is offline')) {
-        console.error("Please check your Firebase configuration. ");
-      }
+      console.error('CloudBase connection check failed. Please verify TCB_ENV_ID and login state.', error);
     }
   },
 
@@ -373,14 +392,10 @@ export const taskService = {
     const collections = ['parent_tasks', 'sub_tasks', 'task_templates', 'template_items', 'settings'];
     for (const colName of collections) {
       try {
-        const q = query(collection(db, colName), where('owner_id', '==', userId));
-        const snapshot = await getDocs(q);
-        const batch = writeBatch(db);
-        snapshot.docs.forEach((docSnap) => {
-          batch.delete(docSnap.ref);
-        });
-        await batch.commit();
-        console.log(`Cleaned up ${snapshot.size} documents from ${colName}`);
+        const res = await db.collection(colName).where({ owner_id: userId }).limit(READ_LIMIT).get();
+        const docs = (res.data as any[]) || [];
+        await Promise.all(docs.map((d) => db.collection(colName).doc(d._id).remove()));
+        console.log(`Cleaned up ${docs.length} documents from ${colName}`);
       } catch (error) {
         console.error(`Error cleaning up ${colName}:`, error);
       }
@@ -398,18 +413,7 @@ export const taskService = {
       guestObservers.add(update);
       return () => guestObservers.delete(update);
     }
-    if (!auth.currentUser) return () => {};
-    const q = query(
-      collection(db, 'parent_tasks'),
-      where('owner_id', '==', auth.currentUser.uid),
-      where('is_hidden', '==', showHidden)
-    );
-    return onSnapshot(q, (snapshot) => {
-      const tasks = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ParentTask));
-      // Sort by order if available, otherwise by created_at
-      tasks.sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-      callback(tasks);
-    }, (error) => handleFirestoreError(error, OperationType.LIST, 'parent_tasks', false));
+    return watchOwnedDocs<ParentTask>('parent_tasks', { is_hidden: showHidden }, callback);
   },
 
   async addParentTask(task: Omit<ParentTask, 'id' | 'created_at' | 'updated_at' | 'owner_id'>) {
@@ -431,11 +435,10 @@ export const taskService = {
     const path = 'parent_tasks';
     try {
       // Get current count to set order
-      const q = query(collection(db, path), where('owner_id', '==', auth.currentUser.uid));
-      const snapshot = await getDocs(q);
-      const order = snapshot.size;
+      const existing = await getOwnedDocs(path);
+      const order = existing.length;
 
-      const docRef = await addDoc(collection(db, path), {
+      const res = await db.collection(path).add({
         ...task,
         is_hidden: false,
         order,
@@ -443,9 +446,9 @@ export const taskService = {
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       });
-      return docRef.id;
+      return res.id;
     } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, path);
+      handleDbError(error, OperationType.CREATE, path);
     }
   },
 
@@ -464,12 +467,12 @@ export const taskService = {
     }
     const path = `parent_tasks/${id}`;
     try {
-      await updateDoc(doc(db, 'parent_tasks', id), {
+      await db.collection('parent_tasks').doc(id).update({
         ...task,
         updated_at: new Date().toISOString()
       });
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, path);
+      handleDbError(error, OperationType.UPDATE, path);
     }
   },
 
@@ -483,19 +486,13 @@ export const taskService = {
     const path = `parent_tasks/${id}`;
     try {
       // Delete associated sub-tasks first
-      const q = query(
-        collection(db, 'sub_tasks'),
-        where('parent_task_id', '==', id),
-        where('owner_id', '==', auth.currentUser?.uid)
-      );
-      const subTasksSnapshot = await getDocs(q);
-      const deletePromises = subTasksSnapshot.docs.map(d => deleteDoc(d.ref));
-      await Promise.all(deletePromises);
+      const subTasks = await getOwnedDocs('sub_tasks', { parent_task_id: id });
+      await Promise.all(subTasks.map((d) => db.collection('sub_tasks').doc(d._id).remove()));
 
       // Delete parent task
-      await deleteDoc(doc(db, 'parent_tasks', id));
+      await db.collection('parent_tasks').doc(id).remove();
     } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, path);
+      handleDbError(error, OperationType.DELETE, path);
     }
   },
 
@@ -510,18 +507,16 @@ export const taskService = {
     if (!auth.currentUser) throw new Error('User not authenticated');
     try {
       // Delete all parent tasks
-      const pq = query(collection(db, 'parent_tasks'), where('owner_id', '==', auth.currentUser.uid));
-      const pSnapshot = await getDocs(pq);
-      const pDeletes = pSnapshot.docs.map(d => deleteDoc(d.ref));
-      
+      const parents = await getOwnedDocs('parent_tasks');
+      const pDeletes = parents.map((d) => db.collection('parent_tasks').doc(d._id).remove());
+
       // Delete all sub tasks
-      const sq = query(collection(db, 'sub_tasks'), where('owner_id', '==', auth.currentUser.uid));
-      const sSnapshot = await getDocs(sq);
-      const sDeletes = sSnapshot.docs.map(d => deleteDoc(d.ref));
+      const subs = await getOwnedDocs('sub_tasks');
+      const sDeletes = subs.map((d) => db.collection('sub_tasks').doc(d._id).remove());
 
       await Promise.all([...pDeletes, ...sDeletes]);
     } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, 'all_data');
+      handleDbError(error, OperationType.DELETE, 'all_data');
     }
   },
 
@@ -535,16 +530,7 @@ export const taskService = {
       guestObservers.add(update);
       return () => guestObservers.delete(update);
     }
-    if (!auth.currentUser) return () => {};
-    const q = query(
-      collection(db, 'sub_tasks'),
-      where('owner_id', '==', auth.currentUser.uid)
-    );
-    return onSnapshot(q, (snapshot) => {
-      const tasks = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as SubTask));
-      tasks.sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-      callback(tasks);
-    }, (error) => handleFirestoreError(error, OperationType.LIST, 'sub_tasks', false));
+    return watchOwnedDocs<SubTask>('sub_tasks', {}, callback);
   },
 
   subscribeSubTasks(parentTaskId: string, callback: (tasks: SubTask[]) => void) {
@@ -557,17 +543,7 @@ export const taskService = {
       guestObservers.add(update);
       return () => guestObservers.delete(update);
     }
-    if (!auth.currentUser) return () => {};
-    const q = query(
-      collection(db, 'sub_tasks'), 
-      where('parent_task_id', '==', parentTaskId),
-      where('owner_id', '==', auth.currentUser.uid)
-    );
-    return onSnapshot(q, (snapshot) => {
-      const tasks = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as SubTask));
-      tasks.sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-      callback(tasks);
-    }, (error) => handleFirestoreError(error, OperationType.LIST, 'sub_tasks', false));
+    return watchOwnedDocs<SubTask>('sub_tasks', { parent_task_id: parentTaskId }, callback);
   },
 
   async addSubTask(task: Omit<SubTask, 'id' | 'created_at' | 'updated_at' | 'owner_id'>) {
@@ -588,11 +564,10 @@ export const taskService = {
     if (!auth.currentUser) throw new Error('User not authenticated');
     const path = 'sub_tasks';
     try {
-      const q = query(collection(db, path), where('parent_task_id', '==', task.parent_task_id), where('owner_id', '==', auth.currentUser.uid));
-      const snapshot = await getDocs(q);
-      const order = snapshot.size;
+      const existing = await getOwnedDocs(path, { parent_task_id: task.parent_task_id });
+      const order = existing.length;
 
-      const docRef = await addDoc(collection(db, path), {
+      const res = await db.collection(path).add({
         ...task,
         is_in_report: false,
         order,
@@ -600,9 +575,9 @@ export const taskService = {
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       });
-      return docRef.id;
+      return res.id;
     } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, path);
+      handleDbError(error, OperationType.CREATE, path);
     }
   },
 
@@ -647,12 +622,12 @@ export const taskService = {
     }
     const path = `sub_tasks/${id}`;
     try {
-      await updateDoc(doc(db, 'sub_tasks', id), {
+      await db.collection('sub_tasks').doc(id).update({
         ...task,
         updated_at: new Date().toISOString()
       });
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, path);
+      handleDbError(error, OperationType.UPDATE, path);
     }
   },
 
@@ -664,9 +639,9 @@ export const taskService = {
     }
     const path = `sub_tasks/${id}`;
     try {
-      await deleteDoc(doc(db, 'sub_tasks', id));
+      await db.collection('sub_tasks').doc(id).remove();
     } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, path);
+      handleDbError(error, OperationType.DELETE, path);
     }
   },
 
@@ -680,16 +655,7 @@ export const taskService = {
       guestObservers.add(update);
       return () => guestObservers.delete(update);
     }
-    if (!auth.currentUser) return () => {};
-    const q = query(
-      collection(db, 'task_templates'),
-      where('owner_id', '==', auth.currentUser.uid)
-    );
-    return onSnapshot(q, (snapshot) => {
-      const templates = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as TaskTemplate));
-      templates.sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-      callback(templates);
-    }, (error) => handleFirestoreError(error, OperationType.LIST, 'task_templates', false));
+    return watchOwnedDocs<TaskTemplate>('task_templates', {}, callback);
   },
 
   async addTaskTemplate(template: Omit<TaskTemplate, 'id' | 'created_at' | 'updated_at' | 'owner_id'>) {
@@ -709,20 +675,19 @@ export const taskService = {
     if (!auth.currentUser) throw new Error('User not authenticated');
     const path = 'task_templates';
     try {
-      const q = query(collection(db, path), where('owner_id', '==', auth.currentUser.uid));
-      const snapshot = await getDocs(q);
-      const order = snapshot.size;
+      const existing = await getOwnedDocs(path);
+      const order = existing.length;
 
-      const docRef = await addDoc(collection(db, path), {
+      const res = await db.collection(path).add({
         ...template,
         order,
         owner_id: auth.currentUser.uid,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       });
-      return docRef.id;
+      return res.id;
     } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, path);
+      handleDbError(error, OperationType.CREATE, path);
     }
   },
 
@@ -741,12 +706,12 @@ export const taskService = {
     }
     const path = `task_templates/${id}`;
     try {
-      await updateDoc(doc(db, 'task_templates', id), {
+      await db.collection('task_templates').doc(id).update({
         ...updates,
         updated_at: new Date().toISOString()
       });
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, path);
+      handleDbError(error, OperationType.UPDATE, path);
     }
   },
 
@@ -760,19 +725,13 @@ export const taskService = {
     const path = `task_templates/${id}`;
     try {
       // Delete associated template items first
-      const q = query(
-        collection(db, 'template_items'),
-        where('template_id', '==', id),
-        where('owner_id', '==', auth.currentUser?.uid)
-      );
-      const itemsSnapshot = await getDocs(q);
-      const deletePromises = itemsSnapshot.docs.map(d => deleteDoc(d.ref));
-      await Promise.all(deletePromises);
+      const items = await getOwnedDocs('template_items', { template_id: id });
+      await Promise.all(items.map((d) => db.collection('template_items').doc(d._id).remove()));
 
       // Delete template
-      await deleteDoc(doc(db, 'task_templates', id));
+      await db.collection('task_templates').doc(id).remove();
     } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, path);
+      handleDbError(error, OperationType.DELETE, path);
     }
   },
 
@@ -787,17 +746,7 @@ export const taskService = {
       guestObservers.add(update);
       return () => guestObservers.delete(update);
     }
-    if (!auth.currentUser) return () => {};
-    const q = query(
-      collection(db, 'template_items'),
-      where('template_id', '==', templateId),
-      where('owner_id', '==', auth.currentUser.uid)
-    );
-    return onSnapshot(q, (snapshot) => {
-      const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as TemplateItem));
-      items.sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-      callback(items);
-    }, (error) => handleFirestoreError(error, OperationType.LIST, 'template_items', false));
+    return watchOwnedDocs<TemplateItem>('template_items', { template_id: templateId }, callback);
   },
 
   async addTemplateItem(item: Omit<TemplateItem, 'id' | 'created_at' | 'updated_at' | 'owner_id'>) {
@@ -817,20 +766,19 @@ export const taskService = {
     if (!auth.currentUser) throw new Error('User not authenticated');
     const path = 'template_items';
     try {
-      const q = query(collection(db, path), where('template_id', '==', item.template_id), where('owner_id', '==', auth.currentUser.uid));
-      const snapshot = await getDocs(q);
-      const order = snapshot.size;
+      const existing = await getOwnedDocs(path, { template_id: item.template_id });
+      const order = existing.length;
 
-      const docRef = await addDoc(collection(db, path), {
+      const res = await db.collection(path).add({
         ...item,
         order,
         owner_id: auth.currentUser.uid,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       });
-      return docRef.id;
+      return res.id;
     } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, path);
+      handleDbError(error, OperationType.CREATE, path);
     }
   },
 
@@ -849,12 +797,12 @@ export const taskService = {
     }
     const path = `template_items/${id}`;
     try {
-      await updateDoc(doc(db, 'template_items', id), {
+      await db.collection('template_items').doc(id).update({
         ...updates,
         updated_at: new Date().toISOString()
       });
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, path);
+      handleDbError(error, OperationType.UPDATE, path);
     }
   },
 
@@ -866,9 +814,9 @@ export const taskService = {
     }
     const path = `template_items/${id}`;
     try {
-      await deleteDoc(doc(db, 'template_items', id));
+      await db.collection('template_items').doc(id).remove();
     } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, path);
+      handleDbError(error, OperationType.DELETE, path);
     }
   },
 
@@ -877,13 +825,8 @@ export const taskService = {
       return guestStore.template_items.filter(t => t.template_id === templateId);
     }
     if (!auth.currentUser) throw new Error('User not authenticated');
-    const q = query(
-      collection(db, 'template_items'),
-      where('template_id', '==', templateId),
-      where('owner_id', '==', auth.currentUser.uid)
-    );
-    const snapshot = await getDocs(q);
-    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as TemplateItem));
+    const items = await getOwnedDocs('template_items', { template_id: templateId });
+    return items.map((d) => mapDoc<TemplateItem>(d));
   },
 
   // Settings
@@ -896,19 +839,23 @@ export const taskService = {
       guestObservers.add(update);
       return () => guestObservers.delete(update);
     }
-    if (!auth.currentUser) return () => {};
-    const q = query(
-      collection(db, 'settings'),
-      where('owner_id', '==', auth.currentUser.uid)
-    );
-    return onSnapshot(q, (snapshot) => {
-      if (snapshot.empty) {
-        callback(null);
-      } else {
-        const doc = snapshot.docs[0];
-        callback({ id: doc.id, ...doc.data() } as UserSettings);
-      }
-    }, (error) => handleFirestoreError(error, OperationType.LIST, 'settings', false));
+    const owner = auth.currentUser?.uid;
+    if (!owner) return () => {};
+    const watcher = db.collection('settings')
+      .where({ owner_id: owner })
+      .limit(READ_LIMIT)
+      .watch({
+        onChange: (snapshot: any) => {
+          const docs = (snapshot?.docs as any[]) || [];
+          if (docs.length === 0) {
+            callback(null);
+          } else {
+            callback(mapDoc<UserSettings>(docs[0]));
+          }
+        },
+        onError: (error: any) => handleDbError(error, OperationType.LIST, 'settings', false),
+      });
+    return () => watcher.close();
   },
 
   async updateSettings(id: string | undefined, settings: Partial<UserSettings>) {
@@ -932,23 +879,23 @@ export const taskService = {
     if (id) {
       const path = `settings/${id}`;
       try {
-        await updateDoc(doc(db, 'settings', id), {
+        await db.collection('settings').doc(id).update({
           ...settings,
           updated_at: new Date().toISOString()
         });
       } catch (error) {
-        handleFirestoreError(error, OperationType.UPDATE, path);
+        handleDbError(error, OperationType.UPDATE, path);
       }
     } else {
       const path = 'settings';
       try {
-        await addDoc(collection(db, path), {
+        await db.collection(path).add({
           ...settings,
           owner_id: auth.currentUser.uid,
           updated_at: new Date().toISOString()
         });
       } catch (error) {
-        handleFirestoreError(error, OperationType.CREATE, path);
+        handleDbError(error, OperationType.CREATE, path);
       }
     }
   },
@@ -978,30 +925,25 @@ export const taskService = {
     const path = 'daily_reports';
     try {
       // Try update existing report for the same date first
-      const q = query(
-        collection(db, path),
-        where('owner_id', '==', auth.currentUser.uid),
-        where('date', '==', snapshot.date)
-      );
-      const existing = await getDocs(q);
+      const existing = await getOwnedDocs(path, { date: snapshot.date });
       const now = new Date().toISOString();
-      if (!existing.empty) {
-        const docRef = existing.docs[0].ref;
-        await updateDoc(docRef, {
+      if (existing.length > 0) {
+        const docId = existing[0]._id;
+        await db.collection(path).doc(docId).update({
           ...snapshot,
           updated_at: now,
         });
-        return existing.docs[0].id;
+        return docId;
       }
-      const newDoc = await addDoc(collection(db, path), {
+      const res = await db.collection(path).add({
         ...snapshot,
         owner_id: auth.currentUser.uid,
         created_at: now,
         updated_at: now,
       });
-      return newDoc.id;
+      return res.id;
     } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, path);
+      handleDbError(error, OperationType.CREATE, path);
       throw error;
     }
   },
@@ -1018,17 +960,11 @@ export const taskService = {
     if (!auth.currentUser) return null;
     const path = 'daily_reports';
     try {
-      const q = query(
-        collection(db, path),
-        where('owner_id', '==', auth.currentUser.uid),
-        where('date', '==', date)
-      );
-      const snap = await getDocs(q);
-      if (snap.empty) return null;
-      const doc = snap.docs[0];
-      return { id: doc.id, ...doc.data() } as DailyReportSnapshot;
+      const docs = await getOwnedDocs(path, { date });
+      if (docs.length === 0) return null;
+      return mapDoc<DailyReportSnapshot>(docs[0]);
     } catch (error) {
-      handleFirestoreError(error, OperationType.GET, path, false);
+      handleDbError(error, OperationType.GET, path, false);
       return null;
     }
   },
@@ -1043,17 +979,10 @@ export const taskService = {
     if (!auth.currentUser) throw new Error('User not authenticated');
     const path = 'daily_reports';
     try {
-      const q = query(
-        collection(db, path),
-        where('owner_id', '==', auth.currentUser.uid),
-        where('date', '==', date)
-      );
-      const snap = await getDocs(q);
-      for (const d of snap.docs) {
-        await deleteDoc(d.ref);
-      }
+      const docs = await getOwnedDocs(path, { date });
+      await Promise.all(docs.map((d) => db.collection(path).doc(d._id).remove()));
     } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, path);
+      handleDbError(error, OperationType.DELETE, path);
     }
   }
 };
