@@ -6,9 +6,8 @@ import {
   Clock, 
   AlertTriangle, 
   ChevronRight, 
-  Trash2, 
-  Download, 
-  Layers, 
+  Trash2,
+  Layers,
   CheckCircle2,
   LayoutGrid,
   List, 
@@ -22,7 +21,6 @@ import {
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import { Resizable } from 'react-resizable';
 import { taskService } from '../services/taskService';
-import ExcelJS from 'exceljs';
 
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -82,7 +80,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, onSelectTask,
   const [newPlannedHours, setNewPlannedHours] = useState<number>(0);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
   const [templates, setTemplates] = useState<TaskTemplate[]>([]);
-  const [isExporting, setIsExporting] = useState(false);
   const [allSubTasks, setAllSubTasks] = useState<SubTask[]>([]);
 
   useEffect(() => {
@@ -249,38 +246,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, onSelectTask,
     });
   };
 
-  const handleExport = async () => {
-    setIsExporting(true);
-    try {
-      const workbook = new ExcelJS.Workbook();
-      const sheet = workbook.addWorksheet('WeeklyReport');
-      sheet.addRow(['Project Name', 'Deadline', 'Planned Hours', 'Created At']);
-      parentTasks.forEach(t => {
-        sheet.addRow([
-          t.name,
-          t.deadline,
-          t.planned_hours,
-          new Date(t.created_at).toLocaleDateString(),
-        ]);
-      });
-
-      const buffer = await workbook.xlsx.writeBuffer();
-      const blob = new Blob([buffer], {
-        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `Weekly_Report_${new Date().toISOString().split('T')[0]}.xlsx`;
-      link.click();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setIsExporting(false);
-    }
-  };
-
   const getProjectStats = (parentId: string) => {
     const subTasks = allSubTasks.filter(st => st.parent_task_id === parentId);
     if (subTasks.length === 0) return { progress: 0, planned: 0, actual: 0, hasSubTasks: false, hasDelay: false, status: 'not_started' as ProjectStatus, maxSubTaskDueDate: '' };
@@ -379,12 +344,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, onSelectTask,
             </button>
           </div>
           <button
-            onClick={handleExport}
-            disabled={isExporting}
-            className="mac-button mac-button-secondary flex items-center gap-2 text-xs sm:text-sm"
+            onClick={() => setIsClearingAll(true)}
+            disabled={parentTasks.length === 0}
+            className="mac-button mac-button-secondary flex items-center gap-2 text-xs sm:text-sm text-[#ff3b30] disabled:opacity-40"
+            title="全てのタスク（親・子）を削除"
           >
-            <Download size={18} />
-            <span className="hidden sm:inline">{isExporting ? 'Exporting...' : '週報エクスポート'}</span>
+            <Trash2 size={18} />
+            <span className="hidden sm:inline">全タスク削除</span>
           </button>
           <button
             onClick={() => setIsAdding(true)}
@@ -1121,8 +1087,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, onSelectTask,
               <h3 className="text-lg font-bold">削除の確認</h3>
             </div>
             <p className="text-[#1d1d1f] mb-6">
-              {isClearingAll 
-                ? '全てのデータを削除しますか？この操作は取り消せません。' 
+              {isClearingAll
+                ? '全てのタスク（親タスク・子タスク）を削除しますか？この操作は取り消せません。'
                 : `「${deleteTarget?.name}」と全ての関連タスクを削除しますか？`}
             </p>
             <div className="flex gap-3">

@@ -8,3 +8,8 @@ coverage/
 !.env.example
 .claude/
 .firebase/
+
+# ローカル HTTPS 用の証明書（DEV_LOCAL_HTTPS.md 参照）。コミットしない。
+certs/
+*.pem
+*-key.pem

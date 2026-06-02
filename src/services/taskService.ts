@@ -12,6 +12,8 @@ export enum OperationType {
 
 interface DbErrorInfo {
   error: string;
+  code?: string | number;
+  requestId?: string;
   operationType: OperationType;
   path: string | null;
   authInfo: {
@@ -22,9 +24,46 @@ interface DbErrorInfo {
   }
 }
 
+/**
+ * 任意の形のエラーから可読なメッセージを取り出す。
+ * CloudBase(腾讯云开发) の SDK は Error インスタンスではなくプレーンオブジェクト
+ * （例: { code: 'DATABASE_PERMISSION_DENIED', message: '...', requestId: '...' }）を
+ * throw するため、`String(error)` では "[object Object]" になってしまう。
+ * code / message / errMsg などを優先的に抽出し、最後の手段として JSON 化する。
+ */
+function extractErrorMessage(error: unknown): { message: string; code?: string | number; requestId?: string } {
+  if (error instanceof Error) return { message: error.message };
+  if (typeof error === 'string') return { message: error };
+  if (error && typeof error === 'object') {
+    const e = error as Record<string, any>;
+    const code = e.code ?? e.error_code ?? e.errCode ?? e.status;
+    const requestId = e.requestId ?? e.request_id;
+    const message =
+      e.message ??
+      e.errMsg ??
+      e.error_msg ??
+      e.error_description ??
+      e.msg ??
+      e.error ??
+      // 既知のフィールドが無ければ全体を JSON 化（[object Object] を避ける）
+      (() => {
+        try {
+          return JSON.stringify(e);
+        } catch {
+          return Object.prototype.toString.call(e);
+        }
+      })();
+    return { message: String(message), code, requestId };
+  }
+  return { message: String(error) };
+}
+
 function handleDbError(error: unknown, operationType: OperationType, path: string | null, shouldThrow = true) {
+  const { message, code, requestId } = extractErrorMessage(error);
   const errInfo: DbErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
+    error: message,
+    ...(code !== undefined ? { code } : {}),
+    ...(requestId !== undefined ? { requestId } : {}),
     authInfo: {
       userId: auth.currentUser?.uid,
       email: auth.currentUser?.email,
@@ -34,7 +73,7 @@ function handleDbError(error: unknown, operationType: OperationType, path: strin
     operationType,
     path
   }
-  console.error('CloudBase DB Error: ', JSON.stringify(errInfo));
+  console.error('CloudBase DB Error: ', JSON.stringify(errInfo), '\nraw error:', error);
   if (shouldThrow) {
     throw new Error(JSON.stringify(errInfo));
   }
@@ -46,6 +85,8 @@ function handleDbError(error: unknown, operationType: OperationType, path: strin
 //  - get() の既定取得件数は 20 件のため limit を引き上げる。
 // ============================================================
 const READ_LIMIT = 1000;
+// realtime watch が使えない環境向けのポーリング間隔（watch 成功時は停止する）。
+const POLL_INTERVAL_MS = 5000;
 
 /** CloudBase ドキュメント（_id）をアプリのモデル（id）へ変換する。 */
 function mapDoc<T>(d: any): T {
@@ -66,7 +107,14 @@ async function getOwnedDocs(collName: string, extra: Record<string, any> = {}): 
   return (res.data as any[]) || [];
 }
 
-/** owner_id（＋追加条件）の所有ドキュメントをリアルタイム監視する。 */
+/** owner_id（＋追加条件）の所有ドキュメントを監視する。
+ *  - まず get() で即時ロードして UI へ反映する。
+ *  - 安全網として常時ポーリングし、watch() が onChange を返した時点で停止する
+ *    （realtime が動けば watch、動かなければポーリングで更新を拾う）。
+ *    安全规则が doc を参照すると watch は INIT_WATCH_FAIL になり onError すら
+ *    呼ばれないことがあるため、onError 任せにせず常時ポーリングで担保する。
+ *  - 同一内容なら callback を呼ばず、無駄な再描画／ちらつきを防ぐ。
+ */
 function watchOwnedDocs<T>(
   collName: string,
   extra: Record<string, any>,
@@ -75,18 +123,63 @@ function watchOwnedDocs<T>(
 ): () => void {
   const owner = auth.currentUser?.uid;
   if (!owner) return () => {};
-  const watcher = db.collection(collName)
-    .where({ owner_id: owner, ...extra })
-    .limit(READ_LIMIT)
-    .watch({
-      onChange: (snapshot: any) => {
-        const rows = ((snapshot?.docs as any[]) || []).map((d) => mapDoc<T>(d));
-        if (options.sort !== false) rows.sort(orderSort);
-        callback(rows);
-      },
-      onError: (err: any) => handleDbError(err, OperationType.LIST, collName, false),
-    });
-  return () => watcher.close();
+
+  let closed = false;
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let lastJson = '';
+
+  const stopPolling = () => {
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  };
+
+  const emit = (docs: any[]) => {
+    const rows = (docs || []).map((d) => mapDoc<T>(d));
+    if (options.sort !== false) rows.sort(orderSort);
+    const json = JSON.stringify(rows);
+    if (json === lastJson) return; // 変化が無ければ再描画しない
+    lastJson = json;
+    if (!closed) callback(rows);
+  };
+
+  const load = async () => {
+    try {
+      emit(await getOwnedDocs(collName, extra));
+    } catch (err) {
+      handleDbError(err, OperationType.LIST, collName, false);
+    }
+  };
+
+  // 即時ロード + 安全網のポーリング（watch 成功で停止）。
+  load();
+  pollTimer = setInterval(load, POLL_INTERVAL_MS);
+
+  let watcher: { close: () => void } | null = null;
+  try {
+    watcher = db.collection(collName)
+      .where({ owner_id: owner, ...extra })
+      .limit(READ_LIMIT)
+      .watch({
+        onChange: (snapshot: any) => {
+          stopPolling(); // realtime が動作 → ポーリング不要
+          emit((snapshot?.docs as any[]) || []);
+        },
+        onError: (err: any) => {
+          // watch 不可。ポーリングは起動済みなので更新は担保される。
+          handleDbError(err, OperationType.LIST, collName, false);
+        },
+      });
+  } catch (err) {
+    handleDbError(err, OperationType.LIST, collName, false);
+  }
+
+  return () => {
+    closed = true;
+    stopPolling();
+    try { watcher?.close(); } catch { /* noop */ }
+  };
 }
 
 
@@ -416,13 +509,13 @@ export const taskService = {
     return watchOwnedDocs<ParentTask>('parent_tasks', { is_hidden: showHidden }, callback);
   },
 
-  async addParentTask(task: Omit<ParentTask, 'id' | 'created_at' | 'updated_at' | 'owner_id'>) {
+  async addParentTask(task: Omit<ParentTask, 'id' | 'created_at' | 'updated_at' | 'owner_id'>, order?: number) {
     if (this.isGuest) {
       const newTask: ParentTask = {
         ...task,
         id: Math.random().toString(36).substr(2, 9),
         is_hidden: false,
-        order: guestStore.parent_tasks.length,
+        order: order ?? guestStore.parent_tasks.length,
         owner_id: 'guest',
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
@@ -434,14 +527,14 @@ export const taskService = {
     if (!auth.currentUser) throw new Error('User not authenticated');
     const path = 'parent_tasks';
     try {
-      // Get current count to set order
-      const existing = await getOwnedDocs(path);
-      const order = existing.length;
+      // order が渡されればそれを使う。無い場合のみ件数を読んで採番する。
+      // （大量インポート時に 1 件ごと全件読み込みすると O(n^2) になるため）
+      const computedOrder = order ?? (await getOwnedDocs(path)).length;
 
       const res = await db.collection(path).add({
         ...task,
         is_hidden: false,
-        order,
+        order: computedOrder,
         owner_id: auth.currentUser.uid,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
@@ -546,13 +639,13 @@ export const taskService = {
     return watchOwnedDocs<SubTask>('sub_tasks', { parent_task_id: parentTaskId }, callback);
   },
 
-  async addSubTask(task: Omit<SubTask, 'id' | 'created_at' | 'updated_at' | 'owner_id'>) {
+  async addSubTask(task: Omit<SubTask, 'id' | 'created_at' | 'updated_at' | 'owner_id'>, order?: number) {
     if (this.isGuest) {
       const newTask: SubTask = {
         ...task,
         id: Math.random().toString(36).substr(2, 9),
         is_in_report: false,
-        order: guestStore.sub_tasks.filter(t => t.parent_task_id === task.parent_task_id).length,
+        order: order ?? guestStore.sub_tasks.filter(t => t.parent_task_id === task.parent_task_id).length,
         owner_id: 'guest',
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
@@ -564,13 +657,13 @@ export const taskService = {
     if (!auth.currentUser) throw new Error('User not authenticated');
     const path = 'sub_tasks';
     try {
-      const existing = await getOwnedDocs(path, { parent_task_id: task.parent_task_id });
-      const order = existing.length;
+      // order が渡されればそれを使い、無い場合のみ件数を読んで採番する。
+      const computedOrder = order ?? (await getOwnedDocs(path, { parent_task_id: task.parent_task_id })).length;
 
       const res = await db.collection(path).add({
         ...task,
         is_in_report: false,
-        order,
+        order: computedOrder,
         owner_id: auth.currentUser.uid,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
@@ -839,23 +932,13 @@ export const taskService = {
       guestObservers.add(update);
       return () => guestObservers.delete(update);
     }
-    const owner = auth.currentUser?.uid;
-    if (!owner) return () => {};
-    const watcher = db.collection('settings')
-      .where({ owner_id: owner })
-      .limit(READ_LIMIT)
-      .watch({
-        onChange: (snapshot: any) => {
-          const docs = (snapshot?.docs as any[]) || [];
-          if (docs.length === 0) {
-            callback(null);
-          } else {
-            callback(mapDoc<UserSettings>(docs[0]));
-          }
-        },
-        onError: (error: any) => handleDbError(error, OperationType.LIST, 'settings', false),
-      });
-    return () => watcher.close();
+    // get + watch（失敗時ポーリング）の共通ロジックを再利用。settings は単一ドキュメント。
+    return watchOwnedDocs<UserSettings>(
+      'settings',
+      {},
+      (rows) => callback(rows.length > 0 ? rows[0] : null),
+      { sort: false },
+    );
   },
 
   async updateSettings(id: string | undefined, settings: Partial<UserSettings>) {

@@ -175,37 +175,43 @@ export const FileImport: React.FC<FileImportProps> = ({ onImportComplete }) => {
 
             if (!parentId) continue;
 
-            for (const row of projectRows) {
-              const dailyReport = parseDate(
-                getRowValue(row, columnMap, 'dailyReport'),
-              );
+            // 各 row を SubTask 入力へ変換。order は行インデックスで確定させ、
+            // 1 件ごとの全件読み込み（O(n^2)）を避ける。
+            const subTaskInputs = projectRows.map((row) => ({
+              parent_task_id: parentId,
+              system: str(row, 'system'),
+              month: str(row, 'month'),
+              daily_report_date:
+                parseDate(getRowValue(row, columnMap, 'dailyReport')) ||
+                new Date().toISOString().split('T')[0],
+              start_date: parseDate(getRowValue(row, columnMap, 'startDate')),
+              due_date: parseDate(getRowValue(row, columnMap, 'dueDate')),
+              final_deadline: parseDate(
+                getRowValue(row, columnMap, 'finalDeadline'),
+              ),
+              status: (str(row, 'status', '未着手') || '未着手') as SubTaskStatus,
+              task_name: str(row, 'taskName'),
+              planned_hours: parseNumber(
+                getRowValue(row, columnMap, 'plannedHours'),
+              ),
+              actual_hours: parseNumber(
+                getRowValue(row, columnMap, 'actualHours'),
+              ),
+              priority: (str(row, 'priority', 'B') || 'B') as Priority,
+              remarks: str(row, 'remarks'),
+              weekday: str(row, 'weekday'),
+              week: str(row, 'week'),
+              week_number: 0,
+              flag: 0,
+            }));
 
-              await taskService.addSubTask({
-                parent_task_id: parentId,
-                system: str(row, 'system'),
-                month: str(row, 'month'),
-                daily_report_date:
-                  dailyReport || new Date().toISOString().split('T')[0],
-                start_date: parseDate(getRowValue(row, columnMap, 'startDate')),
-                due_date: parseDate(getRowValue(row, columnMap, 'dueDate')),
-                final_deadline: parseDate(
-                  getRowValue(row, columnMap, 'finalDeadline'),
-                ),
-                status: (str(row, 'status', '未着手') || '未着手') as SubTaskStatus,
-                task_name: str(row, 'taskName'),
-                planned_hours: parseNumber(
-                  getRowValue(row, columnMap, 'plannedHours'),
-                ),
-                actual_hours: parseNumber(
-                  getRowValue(row, columnMap, 'actualHours'),
-                ),
-                priority: (str(row, 'priority', 'B') || 'B') as Priority,
-                remarks: str(row, 'remarks'),
-                weekday: str(row, 'weekday'),
-                week: str(row, 'week'),
-                week_number: 0,
-                flag: 0,
-              });
+            // 並列書き込み（同時実行数を制限してサーバ負荷を抑える）。
+            const CONCURRENCY = 20;
+            for (let i = 0; i < subTaskInputs.length; i += CONCURRENCY) {
+              const chunk = subTaskInputs.slice(i, i + CONCURRENCY);
+              await Promise.all(
+                chunk.map((input, j) => taskService.addSubTask(input, i + j)),
+              );
             }
           }
 
