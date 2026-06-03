@@ -204,6 +204,19 @@ function watchOwnedDocs<T>(
   };
   activeSubs.add(sub);
 
+  // watch() が使えない環境（INIT_WATCH_FAIL / 非 HTTPS の 403 等）は想定内のため、
+  // エラーを赤ログで連発せず、購読ごとに 1 回だけ簡潔な warn を出す（コンソール汚染を防ぐ）。
+  let warnedWatchFail = false;
+  const warnWatchUnavailable = (err: unknown) => {
+    if (warnedWatchFail) return;
+    warnedWatchFail = true;
+    const code = (err as any)?.code ?? (err as any)?.msg ?? err;
+    console.warn(
+      `[watch] realtime 監視を利用できません（${collName}）。書き込み／タブ復帰時の再取得で更新します。`,
+      code,
+    );
+  };
+
   let watcher: { close: () => void } | null = null;
   try {
     watcher = db.collection(collName)
@@ -214,13 +227,10 @@ function watchOwnedDocs<T>(
           watchActive = true; // realtime が動作 → 再取得は不要
           emit((snapshot?.docs as any[]) || []);
         },
-        onError: (err: any) => {
-          // watch 不可。notifyCollection／タブ復帰で更新を担保する。
-          handleDbError(err, OperationType.LIST, collName, false);
-        },
+        onError: warnWatchUnavailable, // watch 不可。notifyCollection／タブ復帰で担保。
       });
   } catch (err) {
-    handleDbError(err, OperationType.LIST, collName, false);
+    warnWatchUnavailable(err);
   }
 
   return () => {

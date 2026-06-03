@@ -108,11 +108,7 @@ export const SubTaskManagement: React.FC<SubTaskManagementProps> = ({ parentTask
   };
 
   useEffect(() => {
-    const unsubscribe = taskService.subscribeSubTasks(parentTask.id, (tasks) => {
-      console.log('[subscribeSubTasks] Received', tasks.length, 'tasks. Sample icon_data:',
-        tasks.slice(0, 3).map(t => ({ id: t.id, task_name: t.task_name, icon_data: t.icon_data })));
-      setSubTasks(tasks);
-    });
+    const unsubscribe = taskService.subscribeSubTasks(parentTask.id, setSubTasks);
     return () => unsubscribe();
   }, [parentTask.id]);
 
@@ -209,10 +205,8 @@ export const SubTaskManagement: React.FC<SubTaskManagementProps> = ({ parentTask
       }
     }
 
-    console.log('[handleUpdate] Updating task', id, 'with', newUpdates);
     try {
       await taskService.updateSubTask(id, newUpdates);
-      console.log('[handleUpdate] Update successful');
     } catch (err: any) {
       console.error('[handleUpdate] Update failed:', err);
       // Extract concise error message
