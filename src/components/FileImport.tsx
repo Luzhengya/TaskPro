@@ -25,7 +25,7 @@ interface FileImportProps {
   onImportComplete: () => void;
 }
 
-const NO_DATA_MESSAGE = '没有需要导入的数据';
+const NO_DATA_MESSAGE = 'インポートするデータがありません。';
 
 /** Served from `public/task-import-template.xlsx` (Vite static asset). */
 const IMPORT_TEMPLATE_URL = '/task-import-template.xlsx';
@@ -80,7 +80,7 @@ export const FileImport: React.FC<FileImportProps> = ({ onImportComplete }) => {
             workbook.worksheets.find(ws => ws.name.toLowerCase() === 'import') ??
             workbook.worksheets[0];
           if (!worksheet) {
-            throw new Error('Excel 文件中没有工作表。');
+            throw new Error('Excel ファイルにワークシートがありません。');
           }
 
           const allRows = worksheetToRows(worksheet);
@@ -227,7 +227,7 @@ export const FileImport: React.FC<FileImportProps> = ({ onImportComplete }) => {
           }, 1500);
         } catch (err: unknown) {
           const message =
-            err instanceof Error ? err.message : '导入 Excel 失败。';
+            err instanceof Error ? err.message : 'Excel のインポートに失敗しました。';
           setError(message);
         } finally {
           setIsImporting(false);
@@ -235,7 +235,7 @@ export const FileImport: React.FC<FileImportProps> = ({ onImportComplete }) => {
       };
       reader.readAsArrayBuffer(file);
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : '读取文件失败。';
+      const message = err instanceof Error ? err.message : 'ファイルの読み込みに失敗しました。';
       setError(message);
       setIsImporting(false);
     }
@@ -266,14 +266,14 @@ export const FileImport: React.FC<FileImportProps> = ({ onImportComplete }) => {
         {isImporting ? (
           <div className="text-center">
             <Loader2 className="w-12 h-12 text-[#007aff] animate-spin mx-auto mb-4" />
-            <p className="text-lg font-bold">正在导入…</p>
-            <p className="text-sm text-[#86868b]">请稍候</p>
+            <p className="text-lg font-bold">インポート中…</p>
+            <p className="text-sm text-[#86868b]">少々お待ちください</p>
           </div>
         ) : success ? (
           <div className="text-center animate-in zoom-in-95">
             <CheckCircle2 className="w-12 h-12 text-[#28c840] mx-auto mb-4" />
-            <p className="text-lg font-bold">导入成功</p>
-            <p className="text-sm text-[#86868b]">正在跳转到任务列表…</p>
+            <p className="text-lg font-bold">インポート完了</p>
+            <p className="text-sm text-[#86868b]">タスク一覧へ移動します…</p>
           </div>
         ) : (
           <div className="text-center">
@@ -281,15 +281,15 @@ export const FileImport: React.FC<FileImportProps> = ({ onImportComplete }) => {
               <FileUp className="w-8 h-8 text-[#007aff]" />
             </div>
             <p className="text-lg font-bold mb-2">
-              {isDragActive ? '松开以上传文件' : '点击或拖拽 Excel 文件导入'}
+              {isDragActive ? 'ドロップしてアップロード' : 'クリックまたは Excel ファイルをドラッグしてインポート'}
             </p>
             <p className="text-sm text-[#86868b] mb-6">
-              第 1 行为表头，数据从第 2 行开始（{TEMPLATE_HEADERS.projectName}、
-              {TEMPLATE_HEADERS.taskName} 等）
+              1 行目は見出し、データは 2 行目から（{TEMPLATE_HEADERS.projectName}・
+              {TEMPLATE_HEADERS.taskName} など）
             </p>
             <div className="flex items-center gap-2 text-[10px] font-bold text-[#86868b] uppercase tracking-widest bg-[#f5f5f7] px-4 py-2 rounded-full">
               <FileText size={12} />
-              周报模板格式
+              週報テンプレート形式
             </div>
           </div>
         )}
@@ -309,7 +309,7 @@ export const FileImport: React.FC<FileImportProps> = ({ onImportComplete }) => {
           className="mac-button mac-button-secondary inline-flex items-center gap-2 text-sm font-bold"
         >
           <Download size={18} />
-          下载导入模板（Excel）
+          インポートテンプレートをダウンロード（Excel）
         </a>
       </div>
     </div>

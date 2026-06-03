@@ -36,7 +36,7 @@ TaskMaster 是一个面向个人与小团队的任务管理应用，支持任务
    | `APP_URL` | 应用访问地址（自引用链接等） |
    | `TCB_ENV_ID` | 腾讯云开发 CloudBase 环境 ID（认证与数据库必需） |
 
-3. 配置 CloudBase：在云开发控制台开通环境，开启「邮箱登录」与「匿名登录」，创建集合并配置安全规则（详见 `cloudbase/README.md`），将环境 ID 填入 `.env.local` 的 `TCB_ENV_ID`。
+3. 配置 CloudBase：在云开发控制台开通环境，开启「邮箱登录」与「匿名登录」，创建集合并配置安全规则（`cloudbase/database-rules.json`），将环境 ID 填入 `.env.local` 的 `TCB_ENV_ID`。
 
 4. 启动开发环境：
 

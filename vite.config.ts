@@ -22,7 +22,6 @@ export default defineConfig(({mode}) => {
       hmr: false,
       // CloudBase の「Web 安全域名」対策で托管ドメインを hosts 経由でローカルに向けて
       // アクセスするため、Vite の host チェックで弾かれないよう托管ドメインを許可する。
-      // （DEV_LOCAL_HTTPS.md 参照）
       allowedHosts: ['.tcloudbaseapp.com', '.app.tcloudbase.com'],
     },
   };

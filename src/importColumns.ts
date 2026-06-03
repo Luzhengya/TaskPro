@@ -90,7 +90,7 @@ export function buildColumnIndexMap(
 
   if (missing.length > 0) {
     const labels = missing.map(f => TEMPLATE_HEADERS[f]).join('、');
-    throw new Error(`表头缺少必填列：${labels}`);
+    throw new Error(`見出しに必須列がありません：${labels}`);
   }
 
   return map;

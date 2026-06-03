@@ -45,7 +45,6 @@ async function startServer() {
   //    向け、そのドメイン + HTTPS でローカル起動する。ブラウザの Origin が
   //    ホワイトリストのドメインと一致し、DB へのリクエストが 403 にならない。
   //  - SSL_KEY_FILE / SSL_CERT_FILE が指定され実在すれば HTTPS、無ければ従来通り HTTP。
-  //  - 手順は DEV_LOCAL_HTTPS.md を参照。
   // ============================================================
   const keyPath = process.env.SSL_KEY_FILE;
   const certPath = process.env.SSL_CERT_FILE;
@@ -67,7 +66,7 @@ async function startServer() {
     http.createServer(app).listen(PORT, HOST, () => {
       console.log(`HTTP server running on http://localhost:${PORT}`);
       console.log(
-        '注意: localhost では CloudBase DB が 403 になります。HTTPS 手順は DEV_LOCAL_HTTPS.md を参照。',
+        '注意: localhost では CloudBase DB が 403 になります。SSL_KEY_FILE / SSL_CERT_FILE を設定し HTTPS で起動してください。',
       );
     });
   }
