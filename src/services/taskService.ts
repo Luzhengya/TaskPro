@@ -747,25 +747,37 @@ export const taskService = {
     }
   },
 
+  /**
+   * 期日（dueDate）と予定工数（plannedHours）から期限を自動計算する。
+   * 規則表（インポートテンプレートの「規則表」シート）に準拠し、土日を飛ばす：
+   *   ・工数 1～2時間 ：期日＋1営業日
+   *   ・工数 3～5時間 ：期日＋2営業日
+   *   ・工数 5～8時間 ：期日＋4営業日（3～4日のうち長い方）
+   *   ・工数 8時間以上：期日＋1週間（5営業日）
+   * 期日が無い／不正、または工数が規則外（0 以下）の場合は期日をそのまま返す
+   * （期日も無ければ空文字）。
+   */
   calculateDeadline(dueDate: string, plannedHours: number): string {
+    if (!dueDate) return '';
     const date = new Date(dueDate);
-    let businessDaysToAdd = 0;
+    if (isNaN(date.getTime())) return dueDate;
 
-    if (plannedHours >= 1 && plannedHours < 3) {
+    let businessDaysToAdd = 0;
+    if (plannedHours > 0 && plannedHours < 3) {
       businessDaysToAdd = 1;
     } else if (plannedHours >= 3 && plannedHours < 5) {
       businessDaysToAdd = 2;
     } else if (plannedHours >= 5 && plannedHours < 8) {
-      businessDaysToAdd = 4; // User said 3-4, I'll pick 4 for safety or 3. Let's use 4 as per "3-4".
+      businessDaysToAdd = 4;
     } else if (plannedHours >= 8) {
-      businessDaysToAdd = 5; // 1 week business days
+      businessDaysToAdd = 5; // 1週間 ＝ 5営業日
     }
 
     let addedDays = 0;
     while (addedDays < businessDaysToAdd) {
       date.setDate(date.getDate() + 1);
       const day = date.getDay();
-      if (day !== 0 && day !== 6) { // Not Sunday (0) or Saturday (6)
+      if (day !== 0 && day !== 6) { // 日曜(0)・土曜(6)を飛ばす
         addedDays++;
       }
     }

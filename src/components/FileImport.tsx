@@ -183,33 +183,37 @@ export const FileImport: React.FC<FileImportProps> = ({ onImportComplete }) => {
 
             // 各 row を SubTask 入力へ変換。order は行インデックスで確定させ、
             // 1 件ごとの全件読み込み（O(n^2)）を避ける。
-            const subTaskInputs = projectRows.map((row) => ({
-              parent_task_id: parentId,
-              system: str(row, 'system'),
-              month: str(row, 'month'),
-              daily_report_date:
-                parseDate(getRowValue(row, columnMap, 'dailyReport')) ||
-                new Date().toISOString().split('T')[0],
-              start_date: parseDate(getRowValue(row, columnMap, 'startDate')),
-              due_date: parseDate(getRowValue(row, columnMap, 'dueDate')),
-              final_deadline: parseDate(
-                getRowValue(row, columnMap, 'finalDeadline'),
-              ),
-              status: (str(row, 'status', '未着手') || '未着手') as SubTaskStatus,
-              task_name: str(row, 'taskName'),
-              planned_hours: parseNumber(
+            const subTaskInputs = projectRows.map((row) => {
+              const dueDate = parseDate(getRowValue(row, columnMap, 'dueDate'));
+              const plannedHours = parseNumber(
                 getRowValue(row, columnMap, 'plannedHours'),
-              ),
-              actual_hours: parseNumber(
-                getRowValue(row, columnMap, 'actualHours'),
-              ),
-              priority: (str(row, 'priority', 'B') || 'B') as Priority,
-              remarks: str(row, 'remarks'),
-              weekday: str(row, 'weekday'),
-              week: str(row, 'week'),
-              week_number: 0,
-              flag: 0,
-            }));
+              );
+              return {
+                parent_task_id: parentId,
+                system: str(row, 'system'),
+                month: str(row, 'month'),
+                daily_report_date:
+                  parseDate(getRowValue(row, columnMap, 'dailyReport')) ||
+                  new Date().toISOString().split('T')[0],
+                start_date: parseDate(getRowValue(row, columnMap, 'startDate')),
+                due_date: dueDate,
+                // 期限は Excel から取り込まず、期日＋予定工数から自動計算する
+                // （規則表シート参照。土日を飛ばす）。
+                final_deadline: taskService.calculateDeadline(dueDate, plannedHours),
+                status: (str(row, 'status', '未着手') || '未着手') as SubTaskStatus,
+                task_name: str(row, 'taskName'),
+                planned_hours: plannedHours,
+                actual_hours: parseNumber(
+                  getRowValue(row, columnMap, 'actualHours'),
+                ),
+                priority: (str(row, 'priority', 'B') || 'B') as Priority,
+                remarks: str(row, 'remarks'),
+                weekday: str(row, 'weekday'),
+                week: str(row, 'week'),
+                week_number: 0,
+                flag: 0,
+              };
+            });
 
             // 並列書き込み（同時実行数を制限してサーバ負荷を抑える）。
             const CONCURRENCY = 20;

@@ -32,6 +32,14 @@ export interface SubTask {
   remarks: string;
   delay_reason?: string;
   impact_assessment?: '小' | '中' | '大';
+  /** 遅延が後続タスクへ与えた影響日数（0＝影響なし）。 */
+  delay_impact_days?: number;
+  /** 遅延シフト前の期日（取り消し線表示用。シフトされていなければ未設定）。 */
+  original_due_date?: string;
+  /** 遅延シフト前の期限（取り消し線表示用）。 */
+  original_final_deadline?: string;
+  /** このタスクの期日・期限をシフトさせた遅延の発生元ステータス（表示色の決定に使う）。 */
+  delay_shift_status?: SubTaskStatus;
   is_in_report?: boolean;
   order?: number;
   weekday?: string;

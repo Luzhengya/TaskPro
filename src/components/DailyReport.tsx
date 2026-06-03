@@ -17,6 +17,8 @@ import {
 import ReactMarkdown from 'react-markdown';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { DelayModal, DelaySubmitPayload } from './DelayModal';
+import { addBusinessDays, normalizeDate } from '../dateUtils';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -93,6 +95,10 @@ export const DailyReport: React.FC<DailyReportProps> = ({ onJumpToTask }) => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitFeedback, setSubmitFeedback] = useState<string | null>(null);
+
+  // 遅延登録モーダル
+  const [delayModalTask, setDelayModalTask] = useState<SubTask | null>(null);
+  const [delayPrevStatus, setDelayPrevStatus] = useState<SubTaskStatus | null>(null);
 
   // History mode: viewing a past date (not today) — switch to snapshot-based read-only view
   const isHistoryMode = selectedDate !== today;
@@ -187,10 +193,99 @@ export const DailyReport: React.FC<DailyReportProps> = ({ onJumpToTask }) => {
   // Inline status change handler (disabled in history mode)
   const handleStatusChange = async (taskId: string, status: SubTaskStatus) => {
     if (isHistoryMode) return;
+    const task = allSubTasks.find(t => t.id === taskId);
+    const delayedStatuses: SubTaskStatus[] = ['遅れ', '着手遅れ', '期限遅れ'];
+    const updates: Partial<SubTask> = { status };
+    // 遅延系ステータスへの変更時は優先度を A へ引き上げる。
+    if (delayedStatuses.includes(status)) updates.priority = 'A';
     try {
-      await taskService.updateSubTask(taskId, { status });
+      await taskService.updateSubTask(taskId, updates);
+      // 「遅れ」「着手遅れ」に変更したら遅延登録モーダルを開く。
+      if ((status === '遅れ' || status === '着手遅れ') && task) {
+        setDelayPrevStatus(task.status);
+        setDelayModalTask({ ...task, status });
+      }
     } catch (err) {
       console.error('Failed to update status:', err);
+    }
+  };
+
+  // 遅延モーダル：原因を記録し、影響ありなら本タスク＋後続タスクの期日・期限をずらす。
+  const handleDelaySubmit = async ({ reason, impactDays, affectedTaskIds }: DelaySubmitPayload) => {
+    const target = delayModalTask;
+    if (!target) return;
+
+    const updatesById = new Map<string, Record<string, any>>();
+    const ensure = (id: string) => {
+      const existing = updatesById.get(id);
+      if (existing) return existing;
+      const fresh: Record<string, any> = {};
+      updatesById.set(id, fresh);
+      return fresh;
+    };
+
+    const base = ensure(target.id);
+    base.delay_reason = reason;
+    base.delay_impact_days = impactDays;
+
+    if (impactDays > 0) {
+      for (const id of affectedTaskIds) {
+        const t = allSubTasks.find(s => s.id === id);
+        if (!t) continue;
+        const u = ensure(id);
+        // シフトの発生元ステータス（着手遅れ＝黄、遅れ＝赤の表示色を決める）。
+        u.delay_shift_status = target.status;
+        if (t.due_date) {
+          u.original_due_date = t.original_due_date || t.due_date;
+          u.due_date = addBusinessDays(t.due_date, impactDays);
+        }
+        if (t.final_deadline) {
+          u.original_final_deadline = t.original_final_deadline || t.final_deadline;
+          u.final_deadline = addBusinessDays(t.final_deadline, impactDays);
+        }
+      }
+    }
+
+    // 後続タスクのシフトで最大期日が親の最終期日を超えたら、親の最終期日も延ばす。
+    let parentDeadlineUpdate: Promise<unknown> | null = null;
+    if (impactDays > 0) {
+      const siblings = allSubTasks.filter(s => s.parent_task_id === target.parent_task_id);
+      let maxDue = '';
+      for (const s of siblings) {
+        const u = updatesById.get(s.id);
+        const due = u && typeof u.due_date === 'string' && u.due_date ? u.due_date : s.due_date;
+        if (due && normalizeDate(due) > normalizeDate(maxDue)) maxDue = due;
+      }
+      const parent = parentMap.get(target.parent_task_id);
+      if (parent && maxDue && normalizeDate(maxDue) > normalizeDate(parent.deadline)) {
+        parentDeadlineUpdate = taskService.updateParentTask(parent.id, { deadline: maxDue });
+      }
+    }
+
+    setDelayModalTask(null);
+    setDelayPrevStatus(null);
+    try {
+      await Promise.all([
+        ...[...updatesById].map(([id, u]) => taskService.updateSubTask(id, u)),
+        ...(parentDeadlineUpdate ? [parentDeadlineUpdate] : []),
+      ]);
+    } catch (err) {
+      console.error('Failed to register delay:', err);
+    }
+  };
+
+  // キャンセルしたら「遅れ」へ変更する前のステータスへ戻す。
+  const handleDelayCancel = async () => {
+    const target = delayModalTask;
+    const prev = delayPrevStatus;
+    setDelayModalTask(null);
+    setDelayPrevStatus(null);
+    if (target && prev && prev !== '遅れ') {
+      try {
+        await taskService.updateSubTask(target.id, { status: prev });
+      } catch (err) {
+        console.error('Failed to revert status:', err);
+      }
     }
   };
 
@@ -471,7 +566,11 @@ export const DailyReport: React.FC<DailyReportProps> = ({ onJumpToTask }) => {
                 {/* Sub-task rows */}
                 <div className="divide-y divide-gray-50">
                   {tasks.map(t => (
-                    <div key={t.id} className="flex items-stretch group hover:bg-gray-50/50 transition-colors">
+                    <div
+                      key={t.id}
+                      title={t.remarks ? `備考: ${t.remarks}` : undefined}
+                      className="flex items-stretch group hover:bg-gray-50/50 transition-colors"
+                    >
                       {/* Status color bar */}
                       <div className={cn('w-1 flex-shrink-0', statusBarColor[t.status])} />
 
@@ -566,6 +665,22 @@ export const DailyReport: React.FC<DailyReportProps> = ({ onJumpToTask }) => {
                             )}
                           </span>
                         </div>
+
+                        {/* 遅延原因（遅れ・着手遅れタスクのみ表示。着手遅れはオレンジ） */}
+                        {(t.status === '遅れ' || t.status === '着手遅れ') && t.delay_reason && (
+                          <div className={cn(
+                            'mt-1.5 flex items-start gap-1 text-[10px] lg:text-xs',
+                            t.status === '着手遅れ' ? 'text-orange-600' : 'text-red-600',
+                          )}>
+                            <AlertCircle size={12} className="flex-shrink-0 mt-0.5" />
+                            <span className="break-words">
+                              遅延原因: {t.delay_reason}
+                              {t.delay_impact_days
+                                ? `（影響 ${t.delay_impact_days} 日）`
+                                : '（影響なし）'}
+                            </span>
+                          </div>
+                        )}
                       </div>
 
                       {/* Right-side hours (desktop only) */}
@@ -683,6 +798,16 @@ export const DailyReport: React.FC<DailyReportProps> = ({ onJumpToTask }) => {
         </div>
         <div className="absolute -bottom-12 -right-12 w-48 h-48 bg-white/5 rounded-full blur-3xl" />
       </div>
+
+      {delayModalTask && (
+        <DelayModal
+          task={delayModalTask}
+          siblings={allSubTasks.filter(s => s.parent_task_id === delayModalTask.parent_task_id)}
+          projectName={parentMap.get(delayModalTask.parent_task_id)?.name}
+          onCancel={handleDelayCancel}
+          onSubmit={handleDelaySubmit}
+        />
+      )}
     </div>
   );
 };

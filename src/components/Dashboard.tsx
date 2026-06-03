@@ -664,9 +664,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, onSelectTask,
                           </div>
                           {subs.map(t => {
                             const isLate = DELAYED_STATUSES.has(t.status);
+                            const isStartDelay = t.status === '着手遅れ';
+                            // フィルター切替時、対象の遅延タスク下に遅延理由行を表示する。
+                            const showDelayReason = !!t.delay_reason && (
+                              (filter === 'delayed' && (t.status === '遅れ' || t.status === '期限遅れ')) ||
+                              (filter === 'start_delayed' && isStartDelay)
+                            );
                             return (
+                              <React.Fragment key={t.id}>
                               <div
-                                key={t.id}
                                 title={t.remarks ? `備考: ${t.remarks}` : undefined}
                                 className={cn(
                                   "grid items-center gap-3 px-3.5 py-2 my-1 bg-white rounded-lg border border-black/5 text-[12.5px] transition-all hover:border-[#007aff] hover:translate-x-0.5 min-w-[880px]",
@@ -702,6 +708,37 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, onSelectTask,
                                   <span className="text-[#007aff] font-semibold">{t.actual_hours}h</span>
                                 </div>
                               </div>
+
+                              {showDelayReason && (
+                                <div
+                                  className={cn(
+                                    "flex items-center gap-2 px-3.5 py-2 mb-1.5 -mt-0.5 rounded-lg text-[12px] min-w-[880px]",
+                                    isStartDelay ? "bg-amber-50" : "bg-red-50"
+                                  )}
+                                >
+                                  <AlertTriangle
+                                    size={13}
+                                    className={cn("flex-shrink-0", isStartDelay ? "text-amber-500" : "text-red-500")}
+                                  />
+                                  <span
+                                    className={cn(
+                                      "px-1.5 py-0.5 rounded font-bold text-[10.5px] flex-shrink-0",
+                                      isStartDelay ? "bg-amber-100 text-amber-700" : "bg-red-100 text-red-700"
+                                    )}
+                                  >
+                                    遅延理由
+                                  </span>
+                                  <span className={cn("flex-1 min-w-0 truncate", isStartDelay ? "text-amber-800" : "text-red-800")} title={t.delay_reason}>
+                                    {t.delay_reason}
+                                  </span>
+                                  {!!t.delay_impact_days && (
+                                    <span className={cn("font-bold whitespace-nowrap flex-shrink-0", isStartDelay ? "text-amber-600" : "text-red-600")}>
+                                      {t.delay_impact_days}日遅延
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                              </React.Fragment>
                             );
                           })}
                           <div className="flex justify-end pt-2">
