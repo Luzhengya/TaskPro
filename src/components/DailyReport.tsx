@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { SubTask, ParentTask, SubTaskStatus, DailyReportSnapshot } from '../types';
+import { SubTask, ParentTask, SubTaskStatus, DailyReportSnapshot, Priority } from '../types';
 import { taskService } from '../services/taskService';
 import { aiService } from '../services/aiService';
 import {
@@ -12,6 +12,7 @@ import {
   RefreshCw,
   AlertCircle,
   Copy,
+  BarChart3,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { clsx, type ClassValue } from 'clsx';
@@ -34,6 +35,13 @@ const statusBgText: Record<SubTaskStatus, string> = {
   '保留': 'bg-yellow-100 text-yellow-700',
   '着手遅れ': 'bg-orange-100 text-orange-600',
   '期限遅れ': 'bg-red-200 text-red-800',
+};
+
+// 優先度バッジ（A=高 / B=中 / C=低）。週報モードと同じ見た目に揃える。
+const PRIORITY_META: Record<Priority, { label: string; cls: string }> = {
+  A: { label: '高', cls: 'bg-red-100 text-red-700' },
+  B: { label: '中', cls: 'bg-amber-100 text-amber-700' },
+  C: { label: '低', cls: 'bg-gray-100 text-gray-600' },
 };
 
 const statusBarColor: Record<SubTaskStatus, string> = {
@@ -193,6 +201,16 @@ export const DailyReport: React.FC<DailyReportProps> = ({ onJumpToTask }) => {
       await taskService.updateSubTask(task.id, { is_in_report: !task.is_in_report });
     } catch (err) {
       console.error('Failed to toggle report:', err);
+    }
+  };
+
+  // 実績工数を手動更新（履歴表示中は不可）。
+  const handleActualChange = async (taskId: string, hours: number) => {
+    if (isHistoryMode) return;
+    try {
+      await taskService.updateSubTask(taskId, { actual_hours: hours });
+    } catch (err) {
+      console.error('Failed to update actual hours:', err);
     }
   };
 
@@ -357,14 +375,6 @@ export const DailyReport: React.FC<DailyReportProps> = ({ onJumpToTask }) => {
                   本日に戻る
                 </button>
               )}
-              <span className="mx-1">·</span>
-              <span>{stats.total} 件のタスク</span>
-              {stats.delayed > 0 && (
-                <>
-                  <span className="mx-1">·</span>
-                  <span className="text-red-500 font-medium">遅延 {stats.delayed} 件</span>
-                </>
-              )}
               {isHistoryMode && (
                 <span className="ml-2 px-2 py-0.5 bg-amber-100 text-amber-700 text-xs rounded-md font-bold">
                   履歴表示 (読み取り専用)
@@ -507,6 +517,17 @@ export const DailyReport: React.FC<DailyReportProps> = ({ onJumpToTask }) => {
                               <option key={s} value={s}>{s}</option>
                             ))}
                           </select>
+                          {t.priority && PRIORITY_META[t.priority] && (
+                            <span
+                              className={cn(
+                                'inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold',
+                                PRIORITY_META[t.priority].cls,
+                              )}
+                            >
+                              <BarChart3 size={10} />
+                              {PRIORITY_META[t.priority].label}
+                            </span>
+                          )}
                         </div>
                         <div className="flex items-center gap-2 lg:gap-4 text-[10px] lg:text-xs text-[#86868b] flex-wrap">
                           <span>
@@ -531,10 +552,18 @@ export const DailyReport: React.FC<DailyReportProps> = ({ onJumpToTask }) => {
                           </span>
                           {/* Inline hours on mobile */}
                           <span className="text-gray-300 sm:hidden">·</span>
-                          <span className="sm:hidden">
+                          <span className="sm:hidden flex items-center gap-0.5">
                             <span className="font-medium text-[#1d1d1f]">{t.planned_hours}h</span>
                             <span className="mx-0.5">/</span>
-                            <span className="font-medium text-[#007aff]">{t.actual_hours}h</span>
+                            {isHistoryMode ? (
+                              <span className="font-medium text-[#007aff]">{t.actual_hours}h</span>
+                            ) : (
+                              <ActualHoursInput
+                                value={t.actual_hours}
+                                className="w-10"
+                                onCommit={(h) => handleActualChange(t.id, h)}
+                              />
+                            )}
                           </span>
                         </div>
                       </div>
@@ -547,7 +576,15 @@ export const DailyReport: React.FC<DailyReportProps> = ({ onJumpToTask }) => {
                         </div>
                         <div className="flex items-center gap-2 mt-1">
                           <span className="text-[#86868b]">実績</span>
-                          <span className="font-bold text-[#007aff] w-8 text-right">{t.actual_hours}h</span>
+                          {isHistoryMode ? (
+                            <span className="font-bold text-[#007aff] w-8 text-right">{t.actual_hours}h</span>
+                          ) : (
+                            <ActualHoursInput
+                              value={t.actual_hours}
+                              className="w-12"
+                              onCommit={(h) => handleActualChange(t.id, h)}
+                            />
+                          )}
                         </div>
                       </div>
                     </div>
@@ -657,3 +694,39 @@ const StatCard: React.FC<{ label: string; value: string; accent: string }> = ({ 
     <div className={cn('text-xl lg:text-2xl font-bold', accent)}>{value}</div>
   </div>
 );
+
+// 実績工数を手入力する小さな数値インプット。
+// 入力中はローカル状態で保持し、フォーカスアウト / Enter で確定保存する
+// （1 文字ごとに DB 書き込みしてカーソルが飛ぶのを防ぐ）。外部更新には useEffect で追従。
+const ActualHoursInput: React.FC<{
+  value: number;
+  className?: string;
+  onCommit: (hours: number) => void;
+}> = ({ value, className, onCommit }) => {
+  const [local, setLocal] = useState<string>(String(value ?? 0));
+  useEffect(() => { setLocal(String(value ?? 0)); }, [value]);
+  const commit = () => {
+    const n = Number(local);
+    if (!isNaN(n) && n >= 0 && n !== value) {
+      onCommit(n);
+    } else {
+      setLocal(String(value ?? 0));
+    }
+  };
+  return (
+    <input
+      type="number"
+      min={0}
+      step={0.5}
+      value={local}
+      onChange={(e) => setLocal(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+      onClick={(e) => e.stopPropagation()}
+      className={cn(
+        'text-right font-bold text-[#007aff] bg-[#f5f5f7] rounded px-1 py-0.5 focus:outline-none focus:ring-1 focus:ring-[#007aff]/40 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none',
+        className,
+      )}
+    />
+  );
+};

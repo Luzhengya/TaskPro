@@ -115,11 +115,17 @@ export const FileImport: React.FC<FileImportProps> = ({ onImportComplete }) => {
             throw new Error(NO_DATA_MESSAGE);
           }
 
+          // 取込時に日付を YYYY-MM-DD（ゼロ埋め）へ統一する。
+          // 「2024/1/5」「2024-1-5」など区切り・桁が不揃いでも揃え、表示のばらつきを防ぐ。
           const parseDate = (val: unknown) => {
             if (!val) return '';
             if (val instanceof Date) return val.toISOString().split('T')[0];
-            const str = String(val);
-            if (str.includes('/')) return str.replace(/\//g, '-');
+            const str = String(val).trim().replace(/\//g, '-');
+            const parts = str.split('-');
+            if (parts.length === 3) {
+              const [y, m, d] = parts;
+              return `${y.padStart(4, '0')}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+            }
             return str;
           };
 

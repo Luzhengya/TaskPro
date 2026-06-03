@@ -1,22 +1,23 @@
 import React, { useState, useEffect } from 'react';
-import { ParentTask, SubTask, UserSettings, TaskTemplate } from '../types';
-import { 
-  Plus, 
-  Calendar, 
-  Clock, 
-  AlertTriangle, 
-  ChevronRight, 
+import { ParentTask, SubTask, UserSettings, TaskTemplate, Priority } from '../types';
+import {
+  Plus,
+  Calendar,
+  Clock,
+  AlertTriangle,
+  ChevronRight,
   Trash2,
   Layers,
   CheckCircle2,
   LayoutGrid,
-  List, 
+  List,
   BookTemplate,
   GripVertical,
   EyeOff,
   Type,
   Columns,
-  FileText
+  FileText,
+  BarChart3
 } from 'lucide-react';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import { Resizable } from 'react-resizable';
@@ -66,6 +67,13 @@ const SUBTASK_STATUS_PILL: Record<string, string> = {
   '期限遅れ': 'bg-red-200 text-red-800',
 };
 const DELAYED_STATUSES = new Set(['遅れ', '期限遅れ', '着手遅れ']);
+
+// 優先度バッジ（A=高 / B=中 / C=低）。週報モードの子タスク行で表示する。
+const PRIORITY_META: Record<Priority, { label: string; cls: string }> = {
+  A: { label: '高', cls: 'bg-red-100 text-red-700' },
+  B: { label: '中', cls: 'bg-amber-100 text-amber-700' },
+  C: { label: '低', cls: 'bg-gray-100 text-gray-600' },
+};
 
 interface DashboardProps {
   parentTasks: ParentTask[];
@@ -642,12 +650,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, onSelectTask,
                       ) : (
                         <>
                           <div
-                            className="grid items-center gap-3 px-3.5 pb-2 text-[10.5px] font-bold text-[#86868b] uppercase tracking-wider border-b border-black/5 min-w-[620px]"
-                            style={{ gridTemplateColumns: '18px minmax(0,1.5fr) 110px 100px 100px 100px 110px' }}
+                            className="grid items-center gap-3 px-3.5 pb-2 text-[10.5px] font-bold text-[#86868b] uppercase tracking-wider border-b border-black/5 min-w-[880px]"
+                            style={{ gridTemplateColumns: '18px minmax(150px,1.5fr) 110px 90px 100px 100px 100px 110px' }}
                           >
                             <div />
                             <div>タスク名</div>
                             <div>ステータス</div>
+                            <div>優先度</div>
                             <div>開始日</div>
                             <div>期日</div>
                             <div>期限</div>
@@ -658,20 +667,31 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, onSelectTask,
                             return (
                               <div
                                 key={t.id}
+                                title={t.remarks ? `備考: ${t.remarks}` : undefined}
                                 className={cn(
-                                  "grid items-center gap-3 px-3.5 py-2 my-1 bg-white rounded-lg border border-black/5 text-[12.5px] transition-all hover:border-[#007aff] hover:translate-x-0.5 min-w-[620px]",
+                                  "grid items-center gap-3 px-3.5 py-2 my-1 bg-white rounded-lg border border-black/5 text-[12.5px] transition-all hover:border-[#007aff] hover:translate-x-0.5 min-w-[880px]",
                                   isLate && "border-l-[3px] border-l-red-500"
                                 )}
-                                style={{ gridTemplateColumns: '18px minmax(0,1.5fr) 110px 100px 100px 100px 110px' }}
+                                style={{ gridTemplateColumns: '18px minmax(150px,1.5fr) 110px 90px 100px 100px 100px 110px' }}
                               >
                                 <div className="text-gray-300">
                                   <ChevronRight size={10} />
                                 </div>
-                                <div className="font-semibold text-[#1d1d1f] truncate">{t.task_name}</div>
+                                <div className="font-semibold text-[#1d1d1f] truncate" title={t.remarks || t.task_name}>{t.task_name}</div>
                                 <div>
                                   <span className={cn("inline-flex px-2 py-0.5 rounded-full text-[11px] font-semibold", SUBTASK_STATUS_PILL[t.status] || 'bg-gray-100 text-gray-700')}>
                                     {t.status}
                                   </span>
+                                </div>
+                                <div>
+                                  {t.priority && PRIORITY_META[t.priority] ? (
+                                    <span className={cn("inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold", PRIORITY_META[t.priority].cls)}>
+                                      <BarChart3 size={10} />
+                                      {PRIORITY_META[t.priority].label}
+                                    </span>
+                                  ) : (
+                                    <span className="text-gray-300">—</span>
+                                  )}
                                 </div>
                                 <div className="text-[#86868b] tabular-nums">{t.start_date || '—'}</div>
                                 <div className={cn("tabular-nums", isLate ? "text-red-500 font-bold" : "text-[#86868b]")}>{t.due_date || '—'}</div>

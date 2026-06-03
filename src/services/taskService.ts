@@ -107,6 +107,19 @@ async function getOwnedDocs(collName: string, extra: Record<string, any> = {}): 
   return (res.data as any[]) || [];
 }
 
+/**
+ * 単一ドキュメントの update / remove を「owner_id を含む where」経由で行うためのクエリを返す。
+ *
+ * 安全规则 `auth.uid == doc.owner_id` のように `doc.<field>` を参照する場合、CloudBase は
+ * 「クエリ条件にその field を含めること」を要求する。`db.collection(x).doc(id).update()` は
+ * 条件が _id のみで owner_id を含まないため "Permission denied by security rules" になる。
+ * そこで `.where({ _id, owner_id })` を使い、規則の部分集合となる条件で操作する。
+ * （owner は呼び出し側が渡す。未指定なら現在のログインユーザー。）
+ */
+function ownedDoc(collName: string, id: string, owner: string | undefined = auth.currentUser?.uid) {
+  return db.collection(collName).where({ _id: id, owner_id: owner });
+}
+
 /** owner_id（＋追加条件）の所有ドキュメントを監視する。
  *  - まず get() で即時ロードして UI へ反映する。
  *  - 安全網として常時ポーリングし、watch() が onChange を返した時点で停止する
@@ -487,7 +500,7 @@ export const taskService = {
       try {
         const res = await db.collection(colName).where({ owner_id: userId }).limit(READ_LIMIT).get();
         const docs = (res.data as any[]) || [];
-        await Promise.all(docs.map((d) => db.collection(colName).doc(d._id).remove()));
+        await Promise.all(docs.map((d) => ownedDoc(colName, d._id, userId).remove()));
         console.log(`Cleaned up ${docs.length} documents from ${colName}`);
       } catch (error) {
         console.error(`Error cleaning up ${colName}:`, error);
@@ -560,7 +573,7 @@ export const taskService = {
     }
     const path = `parent_tasks/${id}`;
     try {
-      await db.collection('parent_tasks').doc(id).update({
+      await ownedDoc('parent_tasks', id).update({
         ...task,
         updated_at: new Date().toISOString()
       });
@@ -580,32 +593,42 @@ export const taskService = {
     try {
       // Delete associated sub-tasks first
       const subTasks = await getOwnedDocs('sub_tasks', { parent_task_id: id });
-      await Promise.all(subTasks.map((d) => db.collection('sub_tasks').doc(d._id).remove()));
+      await Promise.all(subTasks.map((d) => ownedDoc('sub_tasks', d._id).remove()));
 
       // Delete parent task
-      await db.collection('parent_tasks').doc(id).remove();
+      await ownedDoc('parent_tasks', id).remove();
     } catch (error) {
       handleDbError(error, OperationType.DELETE, path);
     }
   },
 
   async clearAllData() {
+    // 「全タスク削除」は表示中のタスクのみ対象。履歴（is_hidden=true のプロジェクト）・
+    // テンプレート（task_templates）・日報（daily_reports）は削除せず保持する。
     if (this.isGuest) {
-      guestStore.parent_tasks = [];
-      guestStore.sub_tasks = [];
+      const deletedParentIds = new Set(
+        guestStore.parent_tasks.filter(t => !t.is_hidden).map(t => t.id),
+      );
+      guestStore.parent_tasks = guestStore.parent_tasks.filter(t => t.is_hidden);
+      guestStore.sub_tasks = guestStore.sub_tasks.filter(
+        t => !deletedParentIds.has(t.parent_task_id),
+      );
       saveGuestStore(guestStore);
       notifyGuestObservers();
       return;
     }
     if (!auth.currentUser) throw new Error('User not authenticated');
     try {
-      // Delete all parent tasks
-      const parents = await getOwnedDocs('parent_tasks');
-      const pDeletes = parents.map((d) => db.collection('parent_tasks').doc(d._id).remove());
+      // 表示中（is_hidden=false）の親タスクのみ削除。履歴（is_hidden=true）は残す。
+      const parents = await getOwnedDocs('parent_tasks', { is_hidden: false });
+      const deletedParentIds = new Set(parents.map((d) => d._id));
+      const pDeletes = parents.map((d) => ownedDoc('parent_tasks', d._id).remove());
 
-      // Delete all sub tasks
-      const subs = await getOwnedDocs('sub_tasks');
-      const sDeletes = subs.map((d) => db.collection('sub_tasks').doc(d._id).remove());
+      // 削除対象の親に紐づく子タスクのみ削除。履歴プロジェクトの子タスクは残す。
+      const allSubs = await getOwnedDocs('sub_tasks');
+      const sDeletes = allSubs
+        .filter((d) => deletedParentIds.has(d.parent_task_id))
+        .map((d) => ownedDoc('sub_tasks', d._id).remove());
 
       await Promise.all([...pDeletes, ...sDeletes]);
     } catch (error) {
@@ -715,7 +738,7 @@ export const taskService = {
     }
     const path = `sub_tasks/${id}`;
     try {
-      await db.collection('sub_tasks').doc(id).update({
+      await ownedDoc('sub_tasks', id).update({
         ...task,
         updated_at: new Date().toISOString()
       });
@@ -732,7 +755,7 @@ export const taskService = {
     }
     const path = `sub_tasks/${id}`;
     try {
-      await db.collection('sub_tasks').doc(id).remove();
+      await ownedDoc('sub_tasks', id).remove();
     } catch (error) {
       handleDbError(error, OperationType.DELETE, path);
     }
@@ -799,7 +822,7 @@ export const taskService = {
     }
     const path = `task_templates/${id}`;
     try {
-      await db.collection('task_templates').doc(id).update({
+      await ownedDoc('task_templates', id).update({
         ...updates,
         updated_at: new Date().toISOString()
       });
@@ -819,10 +842,10 @@ export const taskService = {
     try {
       // Delete associated template items first
       const items = await getOwnedDocs('template_items', { template_id: id });
-      await Promise.all(items.map((d) => db.collection('template_items').doc(d._id).remove()));
+      await Promise.all(items.map((d) => ownedDoc('template_items', d._id).remove()));
 
       // Delete template
-      await db.collection('task_templates').doc(id).remove();
+      await ownedDoc('task_templates', id).remove();
     } catch (error) {
       handleDbError(error, OperationType.DELETE, path);
     }
@@ -890,7 +913,7 @@ export const taskService = {
     }
     const path = `template_items/${id}`;
     try {
-      await db.collection('template_items').doc(id).update({
+      await ownedDoc('template_items', id).update({
         ...updates,
         updated_at: new Date().toISOString()
       });
@@ -907,7 +930,7 @@ export const taskService = {
     }
     const path = `template_items/${id}`;
     try {
-      await db.collection('template_items').doc(id).remove();
+      await ownedDoc('template_items', id).remove();
     } catch (error) {
       handleDbError(error, OperationType.DELETE, path);
     }
@@ -962,7 +985,7 @@ export const taskService = {
     if (id) {
       const path = `settings/${id}`;
       try {
-        await db.collection('settings').doc(id).update({
+        await ownedDoc('settings', id).update({
           ...settings,
           updated_at: new Date().toISOString()
         });
@@ -1012,7 +1035,7 @@ export const taskService = {
       const now = new Date().toISOString();
       if (existing.length > 0) {
         const docId = existing[0]._id;
-        await db.collection(path).doc(docId).update({
+        await ownedDoc(path, docId).update({
           ...snapshot,
           updated_at: now,
         });
@@ -1063,7 +1086,7 @@ export const taskService = {
     const path = 'daily_reports';
     try {
       const docs = await getOwnedDocs(path, { date });
-      await Promise.all(docs.map((d) => db.collection(path).doc(d._id).remove()));
+      await Promise.all(docs.map((d) => ownedDoc(path, d._id).remove()));
     } catch (error) {
       handleDbError(error, OperationType.DELETE, path);
     }

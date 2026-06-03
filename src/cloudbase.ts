@@ -12,6 +12,9 @@ if (!envId) {
 
 export const app = cloudbase.init({
   env: envId || '',
+  // 環境のリージョン（上海）。未指定だと SDK が env から自動解決するが、
+  // 明示しておくと接続が安定し、SMS 認証コードログイン（ap-shanghai 必須）にも対応できる。
+  region: 'ap-shanghai',
 });
 
 // 認証インスタンス（メール/パスワード・メール認証コード・匿名ログイン）

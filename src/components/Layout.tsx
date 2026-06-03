@@ -8,6 +8,8 @@ interface LayoutProps {
   setActiveTab: (tab: string) => void;
   user: any;
   onLogout: () => void;
+  /** 日報メニューに表示する件数（is_in_report のタスク数）。0 のときは非表示。 */
+  reportCount?: number;
 }
 
 const NAV_ITEMS = [
@@ -19,10 +21,23 @@ const NAV_ITEMS = [
   { id: 'settings', label: '設定', icon: Settings },
 ];
 
-export const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTab, user, onLogout }) => {
+export const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTab, user, onLogout, reportCount = 0 }) => {
   const [isSidebarOpen, setIsSidebarOpen] = React.useState(false);
 
   const navItems = NAV_ITEMS;
+
+  // メニュー項目ごとの件数バッジ（現状は日報のみ）。
+  const navBadge = (id: string): number => (id === 'reports' ? reportCount : 0);
+  const NavBadge: React.FC<{ count: number; active: boolean }> = ({ count, active }) =>
+    count > 0 ? (
+      <span
+        className={`ml-auto min-w-[18px] h-[18px] px-1 inline-flex items-center justify-center rounded-full text-[10px] font-bold ${
+          active ? 'bg-white text-[#007aff]' : 'bg-[#ff3b30] text-white'
+        }`}
+      >
+        {count > 99 ? '99+' : count}
+      </span>
+    ) : null;
 
   const SidebarContent = () => (
     <>
@@ -57,6 +72,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTa
             >
               <item.icon size={18} className={activeTab === item.id ? 'text-white' : 'text-[#007aff]'} />
               <span>{item.label}</span>
+              <NavBadge count={navBadge(item.id)} active={activeTab === item.id} />
             </button>
           ))}
         </nav>
@@ -78,6 +94,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTa
             >
               <item.icon size={18} className={activeTab === item.id ? 'text-white' : 'text-[#86868b]'} />
               <span>{item.label}</span>
+              <NavBadge count={navBadge(item.id)} active={activeTab === item.id} />
             </button>
           ))}
         </nav>

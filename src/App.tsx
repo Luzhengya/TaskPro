@@ -52,6 +52,8 @@ export default function App() {
   const [highlightTaskId, setHighlightTaskId] = useState<string | null>(null);
   const [parentTasks, setParentTasks] = useState<ParentTask[]>([]);
   const [settings, setSettings] = useState<UserSettings | null>(null);
+  // 日報メニューに出す件数（is_in_report のタスク数）。
+  const [reportCount, setReportCount] = useState(0);
 
   // メール認証コードの検証情報を一時保持（送信 → 入力 の2ステップ間で引き継ぐ）
   const signupVerifyRef = useRef<{ email: string; verificationId: string } | null>(null);
@@ -90,6 +92,9 @@ export default function App() {
       taskService.testConnection();
 
       const unsubscribeTasks = taskService.subscribeParentTasks(setParentTasks);
+      const unsubscribeReportCount = taskService.subscribeAllSubTasks((subs) => {
+        setReportCount(subs.filter((t) => t.is_in_report).length);
+      });
       const unsubscribeSettings = taskService.subscribeSettings((s) => {
         if (!s) {
           // Initialize default settings for new user
@@ -112,11 +117,13 @@ export default function App() {
 
       return () => {
         unsubscribeTasks();
+        unsubscribeReportCount();
         unsubscribeSettings();
       };
     } else {
       // Clear data when no user
       setParentTasks([]);
+      setReportCount(0);
       setSettings(null);
       setSelectedParentTask(null);
       setHighlightTaskId(null);
@@ -340,6 +347,7 @@ export default function App() {
         }}
         user={user}
         onLogout={handleLogout}
+        reportCount={reportCount}
       >
         {renderContent()}
       </Layout>
