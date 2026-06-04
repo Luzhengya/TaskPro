@@ -18,7 +18,7 @@ import ReactMarkdown from 'react-markdown';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { DelayModal, DelaySubmitPayload } from './DelayModal';
-import { addBusinessDays, normalizeDate } from '../dateUtils';
+import { addBusinessDays, normalizeDate, todayBeijing } from '../dateUtils';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -71,8 +71,8 @@ const fmtDate = (dateStr?: string) => {
   return dateStr.replace(/-/g, '/');
 };
 
-// Today as YYYY-MM-DD
-const todayStr = () => new Date().toISOString().split('T')[0];
+// Today as YYYY-MM-DD（北京時間 UTC+8 固定で算出。端末タイムゾーンに依存しない）。
+const todayStr = () => todayBeijing();
 
 export const DailyReport: React.FC<DailyReportProps> = ({ onJumpToTask }) => {
   const today = todayStr();
@@ -140,15 +140,23 @@ export const DailyReport: React.FC<DailyReportProps> = ({ onJumpToTask }) => {
 
   // Source of truth for displayed tasks:
   //   - History mode: use the saved snapshot's tasks_snapshot
-  //   - Today mode: use live tasks where is_in_report=true
+  //   - Today mode: live tasks where
+  //       is_in_report=true（既存の手動チェック）
+  //       OR 親が会議集（type==='meeting'）かつ start_date が今日 ← 自動表示
+  //     会議は終わったら（翌日になれば）自動で日報から消える。is_in_report を
+  //     書き換えないので「チェックを外す」と競合せず、過去日も汚さない。
   const reportTasks = useMemo(
     () => {
       if (isHistoryMode) {
         return snapshot?.tasks_snapshot || [];
       }
-      return allSubTasks.filter(t => t.is_in_report);
+      return allSubTasks.filter(t => {
+        if (t.is_in_report) return true;
+        const parent = parentMap.get(t.parent_task_id);
+        return parent?.type === 'meeting' && t.start_date === today;
+      });
     },
-    [isHistoryMode, snapshot, allSubTasks]
+    [isHistoryMode, snapshot, allSubTasks, parentMap, today]
   );
 
   // Stats

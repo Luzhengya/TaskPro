@@ -142,11 +142,22 @@ export const TemplateManagement: React.FC = () => {
           </div>
         </div>
 
-        <div className="mac-card overflow-hidden">
-          <div className="overflow-x-auto">
+        {/*
+          カードに固定高さを与え、内側を overflow-auto（双方向）にすることで、
+          ここを唯一のスクロールコンテナにする。
+          以前は <div overflow-x-auto> 1 枚だけで横スクロールを取っていたが、
+          CSS 仕様上「片方が visible 以外なら他方も auto に昇格」するため、
+          内側 div が縦スクロールコンテナにも昇格してしまっていた。
+          そのうえコンテナに高さが無いので実際にはスクロールしないのに
+          sticky top-[56px] だけが効いて、thead がカード上端から 56px
+          下に張り付き → 本来そこに居るはずの先頭行を覆ってしまっていた。
+          SubTaskManagement と同じ構造（固定高さ + 内側 overflow-auto + top-0）に揃える。
+        */}
+        <div className="mac-card overflow-hidden flex flex-col h-[calc(100vh-220px)] lg:h-[calc(100vh-250px)]">
+          <div className="overflow-auto flex-1 relative">
             <DragDropContext onDragEnd={onDragEnd}>
             <table className="w-full text-left border-separate border-spacing-0 min-w-[680px]">
-              <thead className="sticky top-[56px] lg:top-0 z-10">
+              <thead className="sticky top-0 z-10">
                 <tr className="bg-gray-50 border-b border-gray-100">
                   <th className="px-2 py-3 w-10" />
                   <th className="px-4 py-3 text-[10px] font-bold text-[#86868b] uppercase tracking-widest border-b border-gray-100">システム</th>
@@ -254,13 +265,13 @@ export const TemplateManagement: React.FC = () => {
               </Droppable>
             </table>
             </DragDropContext>
+
+            {templateItems.length === 0 && (
+              <div className="py-20 text-center">
+                <p className="text-[#86868b] italic text-sm">タスクがありません。「タスク追加」ボタンから作成してください。</p>
+              </div>
+            )}
           </div>
-          
-          {templateItems.length === 0 && (
-            <div className="py-20 text-center">
-              <p className="text-[#86868b] italic text-sm">タスクがありません。「タスク追加」ボタンから作成してください。</p>
-            </div>
-          )}
         </div>
       </div>
     );

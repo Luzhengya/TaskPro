@@ -1,6 +1,15 @@
 export type SubTaskStatus = '遅れ' | '済' | '進行中' | '未着手' | '保留' | '着手遅れ' | '期限遅れ';
 export type Priority = 'A' | 'B' | 'C';
 
+/**
+ * 親タスクの種別。
+ *  - 'normal'（既定）: 通常の案件。期日・期限を持つ。
+ *  - 'meeting'      : 会議集（子は個別の会議）。親側の期日は持たず、
+ *                     子の開始日(start_date) == 今日 のときに日報へ自動表示される。
+ * undefined は後方互換のため 'normal' として扱う。
+ * （CloudBase 既存ドキュメント／Excel インポート由来のレコードはこのフィールドを持たない） */
+export type ParentTaskType = 'normal' | 'meeting';
+
 export interface ParentTask {
   id: string;
   name: string;
@@ -10,6 +19,8 @@ export interface ParentTask {
   progress?: number;
   is_hidden?: boolean;
   order?: number;
+  /** 'meeting' のとき会議集として扱う（親の期日表示・整合性チェックを抑制）。 */
+  type?: ParentTaskType;
   created_at: string;
   updated_at: string;
   owner_id?: string;

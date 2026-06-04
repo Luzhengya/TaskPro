@@ -12,6 +12,7 @@ import { Settings } from './components/Settings';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { taskService } from './services/taskService';
 import { ParentTask, UserSettings } from './types';
+import { todayBeijing } from './dateUtils';
 import { Loader2 } from 'lucide-react';
 
 /** CloudBase 認証エラーを、ログインフォームに表示する日本語メッセージへ変換する。 */
@@ -91,9 +92,32 @@ export default function App() {
     if (user || isGuest) {
       taskService.testConnection();
 
-      const unsubscribeTasks = taskService.subscribeParentTasks(setParentTasks);
+      // 日報メニューの件数バッジ。is_in_report=true に加えて、
+      // 「会議集（親 type==='meeting'）の子タスクで開始日が今日」のものも
+      // DailyReport 側で自動表示するので、ここでも同じ OR 条件でカウントする。
+      // parentTasks（is_hidden=false の購読）から親 type をマップに保存し、
+      // subscribeAllSubTasks のたびに再計算する。アーカイブ済（is_hidden=true）の
+      // 親はそもそも今日の業務対象ではないため、ここでは見ない。
+      // 「今日」の判定は北京時間（UTC+8）固定。端末タイムゾーンに依存しない。
+      const today = todayBeijing();
+      const parentTypeMap = new Map<string, string | undefined>();
+      let lastSubs: any[] = [];
+      const recompute = () => {
+        const count = lastSubs.filter((t: any) => {
+          if (t.is_in_report) return true;
+          return parentTypeMap.get(t.parent_task_id) === 'meeting' && t.start_date === today;
+        }).length;
+        setReportCount(count);
+      };
+      const unsubscribeTasks = taskService.subscribeParentTasks((list) => {
+        parentTypeMap.clear();
+        for (const p of list) parentTypeMap.set(p.id, (p as any).type);
+        setParentTasks(list);
+        recompute();
+      });
       const unsubscribeReportCount = taskService.subscribeAllSubTasks((subs) => {
-        setReportCount(subs.filter((t) => t.is_in_report).length);
+        lastSubs = subs;
+        recompute();
       });
       const unsubscribeSettings = taskService.subscribeSettings((s) => {
         if (!s) {

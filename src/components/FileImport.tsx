@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import ExcelJS from 'exceljs';
 import { taskService } from '../services/taskService';
+import { todayBeijing } from '../dateUtils';
 import { Priority, SubTaskStatus } from '../types';
 import {
   buildColumnIndexMap,
@@ -173,7 +174,7 @@ export const FileImport: React.FC<FileImportProps> = ({ onImportComplete }) => {
 
             const parentId = await taskService.addParentTask({
               name: projectName,
-              deadline: deadline || new Date().toISOString().split('T')[0],
+              deadline: deadline || todayBeijing(),
               planned_hours: totalPlanned,
               actual_hours: totalActual,
               progress,
@@ -194,7 +195,7 @@ export const FileImport: React.FC<FileImportProps> = ({ onImportComplete }) => {
                 month: str(row, 'month'),
                 daily_report_date:
                   parseDate(getRowValue(row, columnMap, 'dailyReport')) ||
-                  new Date().toISOString().split('T')[0],
+                  todayBeijing(),
                 start_date: parseDate(getRowValue(row, columnMap, 'startDate')),
                 due_date: dueDate,
                 // 期限は Excel から取り込まず、期日＋予定工数から自動計算する

@@ -17,7 +17,7 @@ import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { DelayModal, DelaySubmitPayload } from './DelayModal';
-import { fmtDate, addBusinessDays } from '../dateUtils';
+import { fmtDate, addBusinessDays, todayBeijing } from '../dateUtils';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -127,12 +127,16 @@ export const SubTaskManagement: React.FC<SubTaskManagementProps> = ({ parentTask
     }
   }, [highlightTaskId, subTasks]);
 
+  // 親が会議集かどうか。会議集は親側の期日を持たないため、整合性チェック・
+  // 遅延シフト時の親期日延長などをスキップする目的で各所から参照する。
+  const isMeetingParent = parentTask.type === 'meeting';
+
   const handleAddRow = async () => {
     const newTaskId = await taskService.addSubTask({
       parent_task_id: parentTask.id,
       system: '',
       month: '',
-      daily_report_date: new Date().toISOString().split('T')[0],
+      daily_report_date: todayBeijing(),
       start_date: '',
       due_date: '',
       final_deadline: '',
@@ -273,7 +277,12 @@ export const SubTaskManagement: React.FC<SubTaskManagementProps> = ({ parentTask
         const due = u && typeof u.due_date === 'string' && u.due_date ? u.due_date : s.due_date;
         if (due && normalizeDate(due) > normalizeDate(maxDue)) maxDue = due;
       }
-      if (maxDue && normalizeDate(maxDue) > normalizeDate(parentTask.deadline)) {
+      // 会議集の親は期日を持たないので、遅延シフトで親の期日を伸ばす処理はスキップする。
+      if (
+        !isMeetingParent &&
+        maxDue &&
+        normalizeDate(maxDue) > normalizeDate(parentTask.deadline)
+      ) {
         parentDeadlineUpdate = taskService.updateParentTask(parentTask.id, { deadline: maxDue });
       }
     }
@@ -385,6 +394,10 @@ export const SubTaskManagement: React.FC<SubTaskManagementProps> = ({ parentTask
         }}
         className={cn(
           "px-4 py-3 text-[10px] font-bold uppercase tracking-widest bg-gray-50 border-b border-gray-100 group select-none",
+          // touch-manipulation: モバイル（iOS Safari / Android Chrome）の
+          // 「ダブルタップで拡大」既定挙動を抑制し、dblclick イベントを発火させるため。
+          // これが無いと、列固定の解除/設定（onDoubleClick）がスマホで効かない。
+          "touch-manipulation",
           index !== 0 && "cursor-pointer",
           isFrozen ? "text-[#007aff]" : "text-[#86868b]",
           isFrozen && "shadow-[1px_0_0_0_rgba(0,0,0,0.05)]"
@@ -422,11 +435,13 @@ export const SubTaskManagement: React.FC<SubTaskManagementProps> = ({ parentTask
   };
 
   // Date anomaly: parent's final due date must not be earlier than the latest subtask due date.
+  // 会議集（isMeetingParent）は親の期日を持たないため、整合性チェック自体を行わない。
   const maxSubTaskDueDate = subTasks.reduce((max, t) => {
     const d = normalizeDate(t.due_date);
     return d > max ? d : max;
   }, '');
   const hasDateAnomaly =
+    !isMeetingParent &&
     maxSubTaskDueDate !== '' &&
     normalizeDate(parentTask.deadline) < maxSubTaskDueDate;
 
@@ -438,9 +453,16 @@ export const SubTaskManagement: React.FC<SubTaskManagementProps> = ({ parentTask
             <ChevronLeft size={24} />
           </button>
           <div className="min-w-0">
-            <h2 className="text-xl lg:text-3xl font-bold tracking-tight text-[#1d1d1f] truncate">{parentTask.name}</h2>
+            <h2 className="text-xl lg:text-3xl font-bold tracking-tight text-[#1d1d1f] truncate flex items-center gap-2">
+              <span className="truncate">{parentTask.name}</span>
+              {isMeetingParent && (
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-purple-100 text-purple-700 flex-shrink-0">
+                  定例
+                </span>
+              )}
+            </h2>
             <p className="text-[#86868b] text-xs lg:text-sm">
-              最終期日: {parentTask.deadline}
+              {isMeetingParent ? '定例作業（親の期日なし）' : `最終期日: ${parentTask.deadline}`}
               {hasDateAnomaly && (
                 <span className="ml-2 text-red-600 font-bold inline-flex items-center gap-1 align-middle">
                   <AlertCircle size={14} />
@@ -480,7 +502,12 @@ export const SubTaskManagement: React.FC<SubTaskManagementProps> = ({ parentTask
         <div className="overflow-auto flex-1 relative">
           <DragDropContext onDragEnd={onDragEnd}>
             <table className="w-full text-left border-separate border-spacing-0">
-              <thead className="sticky top-[56px] lg:top-0 z-50">
+              {/* thead のスティッキー基準は、ページ全体ではなく外側の overflow-auto コンテナ
+                  （この .mac-card 内の .overflow-auto）になる。モバイルヘッダー(56px)の分は
+                  既に親レイアウト側で吸収されているため、ここで top-[56px] を入れると
+                  カード上端から 56px 下にヘッダーが浮き、その隙間にデータが透けてしまう。
+                  PC・モバイル共通で top-0（コンテナ上端）に貼り付けるのが正しい。 */}
+              <thead className="sticky top-0 z-50">
                 <tr className="bg-gray-50">
                   <ResizableTh index={0} />
                   <ResizableTh index={1} title="日報">日報</ResizableTh>
@@ -582,7 +609,7 @@ export const SubTaskManagement: React.FC<SubTaskManagementProps> = ({ parentTask
                                             const updates: Partial<SubTask> = { is_in_report: newIsInReport };
                                             // Only set daily_report_date when first checking and no date is set yet
                                             if (newIsInReport && !task.daily_report_date) {
-                                              updates.daily_report_date = new Date().toISOString().split('T')[0];
+                                              updates.daily_report_date = todayBeijing();
                                             }
                                             handleUpdate(task.id, updates);
                                           }}
