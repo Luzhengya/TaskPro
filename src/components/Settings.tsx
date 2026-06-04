@@ -70,20 +70,23 @@ export const Settings: React.FC = () => {
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-        {/* AI Configuration */}
-        <section className="mac-card p-5 lg:p-8">
+        {/* AI Configuration（一時的に非活性。将来必要になった時点で aria-disabled / pointer-events-none / opacity を外せば復活する） */}
+        <section
+          className="mac-card p-5 lg:p-8 opacity-60 pointer-events-none select-none"
+          aria-disabled="true"
+        >
           <div className="flex items-center gap-3 mb-6">
             <div className="p-2 bg-purple-50 text-purple-600 rounded-xl">
               <Cpu size={24} />
             </div>
             <h3 className="text-xl font-bold text-[#1d1d1f]">AI設定</h3>
+            <span className="ml-auto px-2 py-0.5 bg-gray-200 text-[#86868b] text-[10px] font-bold rounded-full">準備中</span>
           </div>
-          
+
           <div className="space-y-4">
             <div className="p-4 bg-black/[0.02] rounded-xl border border-black/5">
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs font-bold text-[#1d1d1f]">使用モデル</span>
-                <span className="px-2 py-0.5 bg-green-100 text-green-600 text-[10px] font-bold rounded-full">アクティブ</span>
               </div>
               <p className="text-sm font-medium text-[#1d1d1f]">Gemini 3 Flash</p>
               <p className="text-[10px] text-[#86868b] mt-1">タスクの要約と分析に使用されます。</p>
@@ -137,56 +140,22 @@ export const Settings: React.FC = () => {
               </div>
             </div>
 
-            <div className="pt-4 border-t border-black/5">
-              <label className="block text-xs font-bold text-[#1d1d1f] mb-3">テーブルの不透明度</label>
-              <input 
-                type="range" 
-                min="0.5" 
-                max="1" 
-                step="0.1"
-                value={isNaN(settings.ui_preferences.opacity) ? 1 : settings.ui_preferences.opacity}
-                onChange={(e) => {
-                  const val = parseFloat(e.target.value);
-                  setSettings({
-                    ...settings,
-                    ui_preferences: { ...settings.ui_preferences, opacity: isNaN(val) ? 1 : val }
-                  });
-                }}
-                className="w-full accent-[#007aff]"
-              />
-              <div className="flex justify-between text-[10px] text-[#86868b] mt-1">
-                <span>0.5</span>
-                <span>1.0</span>
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-[10px] font-bold text-[#86868b] uppercase tracking-widest mb-3">System Font</label>
-              <select 
-                value={settings.ui_preferences.font}
-                onChange={(e) => setSettings({
-                  ...settings,
-                  ui_preferences: { ...settings.ui_preferences, font: e.target.value }
-                })}
-                className="mac-input w-full"
-              >
-                <option value="Inter">Inter (Sans)</option>
-                <option value="serif">Serif</option>
-                <option value="monospace">Monospace</option>
-              </select>
-            </div>
           </div>
         </section>
 
-        {/* Notifications */}
-        <section className="mac-card p-5 lg:p-8 md:col-span-2">
+        {/* Notifications（一時的に非活性。将来必要になった時点で aria-disabled / pointer-events-none / opacity を外せば復活する） */}
+        <section
+          className="mac-card p-5 lg:p-8 md:col-span-2 opacity-60 pointer-events-none select-none"
+          aria-disabled="true"
+        >
           <div className="flex items-center gap-3 mb-6">
             <div className="p-2 bg-orange-50 text-orange-600 rounded-xl">
               <Bell size={24} />
             </div>
             <h3 className="text-xl font-bold text-[#1d1d1f]">通知設定</h3>
+            <span className="ml-auto px-2 py-0.5 bg-gray-200 text-[#86868b] text-[10px] font-bold rounded-full">準備中</span>
           </div>
-          
+
           <div className="space-y-4">
             {settings.notification_rules.map((rule, index) => (
               <div key={rule.id} className="flex items-center gap-4 p-4 bg-black/[0.02] rounded-xl border border-black/5">

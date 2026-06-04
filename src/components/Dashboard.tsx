@@ -22,6 +22,7 @@ import {
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import { Resizable } from 'react-resizable';
 import { taskService } from '../services/taskService';
+import { todayBeijing } from '../dateUtils';
 import { getEnabledViews, resolveActiveView, ProjectView } from '../viewPrefs';
 
 import { clsx, type ClassValue } from 'clsx';
@@ -43,6 +44,15 @@ function normalizeDate(d?: string): string {
 
 type ProjectStatus = 'completed' | 'delayed' | 'start_delayed' | 'in_progress' | 'not_started';
 type ProjectFilter = 'all' | 'delayed' | 'start_delayed' | 'in_progress' | 'completed';
+
+// 定例作業（type === 'meeting'）であることを示す小さなチップ。
+// 親タスクの名前の横に出して通常案件と区別する。
+// （データ層では引き続き type === 'meeting' で管理。表示文言だけ「定例」）
+const MeetingChip: React.FC = () => (
+  <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-purple-100 text-purple-700 flex-shrink-0">
+    定例
+  </span>
+);
 
 // Dot + label delay badge (matches reference project's "dot" bubble style).
 const DelayBadge: React.FC<{ tone: 'danger' | 'warn' }> = ({ tone }) => {
@@ -84,6 +94,8 @@ interface DashboardProps {
 
 export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, onSelectTask, settings }) => {
   const [isAdding, setIsAdding] = useState(false);
+  // 追加フォームのモード。'normal' = 通常案件（期日・テンプレあり）、'meeting' = 会議集（期日不要）。
+  const [addMode, setAddMode] = useState<'normal' | 'meeting'>('normal');
   const [newName, setNewName] = useState('');
   const [newDueDate, setNewDueDate] = useState('');
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
@@ -184,9 +196,29 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, onSelectTask,
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newName || !newDueDate) return;
+    if (!newName) return;
+    // 会議モードでは期日不要。通常モードでは期日必須。
+    if (addMode === 'normal' && !newDueDate) return;
 
     try {
+      // 会議集は期日・テンプレ展開なしで親だけ作る。子の会議は SubTaskManagement から追加。
+      if (addMode === 'meeting') {
+        await taskService.addParentTask({
+          name: newName,
+          deadline: '', // 会議集は親の期日を持たない
+          planned_hours: 0,
+          actual_hours: 0,
+          progress: 0,
+          type: 'meeting',
+        });
+        setNewName('');
+        setNewDueDate('');
+        setSelectedTemplateId('');
+        setIsAdding(false);
+        setAddMode('normal');
+        return;
+      }
+
       // テンプレ選択時は子タスクを先に取得し、親の予定工数・期日を自動算出する。
       const items = selectedTemplateId
         ? await taskService.getTemplateItems(selectedTemplateId)
@@ -205,7 +237,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, onSelectTask,
         deadline: parentDeadline,
         planned_hours: totalPlanned,
         actual_hours: 0,
-        progress: 0
+        progress: 0,
+        type: 'normal',
       });
 
       if (parentId && items.length) {
@@ -213,7 +246,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, onSelectTask,
           parent_task_id: parentId,
           system: item.system,
           month: '',
-          daily_report_date: new Date().toISOString().split('T')[0],
+          daily_report_date: todayBeijing(),
           start_date: '',
           due_date: newDueDate,
           final_deadline: taskService.calculateDeadline(newDueDate, item.planned_hours),
@@ -233,6 +266,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, onSelectTask,
       setNewDueDate('');
       setSelectedTemplateId('');
       setIsAdding(false);
+      setAddMode('normal');
     } catch (err) {
       console.error('Failed to add project:', err);
     }
@@ -378,7 +412,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, onSelectTask,
             <span className="hidden sm:inline">全タスク削除</span>
           </button>
           <button
-            onClick={() => setIsAdding(true)}
+            onClick={() => { setAddMode('normal'); setIsAdding(true); }}
             className="mac-button mac-button-primary flex items-center gap-2 text-xs sm:text-sm flex-1 sm:flex-initial justify-center"
           >
             <Plus size={18} />
@@ -389,41 +423,72 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, onSelectTask,
 
       {isAdding && (
         <div className="mac-card p-6 animate-in fade-in slide-in-from-top-4">
+          {/* 追加モードのラジオ。定例作業モードでは期日 / テンプレ欄を非表示にする。 */}
+          <div className="mb-4 flex items-center gap-4 flex-wrap">
+            <label className="inline-flex items-center gap-2 cursor-pointer">
+              <input
+                type="radio"
+                name="add-mode"
+                value="normal"
+                checked={addMode === 'normal'}
+                onChange={() => setAddMode('normal')}
+                className="accent-[#007aff]"
+              />
+              <span className="text-sm font-medium text-[#1d1d1f]">通常案件</span>
+            </label>
+            <label className="inline-flex items-center gap-2 cursor-pointer">
+              <input
+                type="radio"
+                name="add-mode"
+                value="meeting"
+                checked={addMode === 'meeting'}
+                onChange={() => setAddMode('meeting')}
+                className="accent-[#007aff]"
+              />
+              <span className="text-sm font-medium text-[#1d1d1f]">定例作業</span>
+            </label>
+          </div>
           <form onSubmit={handleAdd} className="flex flex-wrap gap-4 items-end">
             <div className="flex-1 min-w-[200px]">
-              <label className="block text-xs font-bold text-[#86868b] uppercase tracking-widest mb-2">プロジェクト名</label>
+              <label className="block text-xs font-bold text-[#86868b] uppercase tracking-widest mb-2">
+                {addMode === 'meeting' ? '定例作業名' : 'プロジェクト名'}
+              </label>
               <input
                 type="text"
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
                 className="mac-input w-full"
-                placeholder="例: システム更新 2026"
+                placeholder={addMode === 'meeting' ? '例: 定例作業' : '例: システム更新 2026'}
                 required
               />
             </div>
-            <div className="w-48">
-              <label className="block text-xs font-bold text-[#86868b] uppercase tracking-widest mb-2">期日</label>
-              <input
-                type="date"
-                value={newDueDate}
-                onChange={(e) => setNewDueDate(e.target.value)}
-                className="mac-input w-full"
-                required
-              />
-            </div>
-            <div className="w-64">
-              <label className="block text-xs font-bold text-[#86868b] uppercase tracking-widest mb-2">テンプレ (任意)</label>
-              <select
-                value={selectedTemplateId}
-                onChange={(e) => setSelectedTemplateId(e.target.value)}
-                className="mac-input w-full"
-              >
-                <option value="">なし</option>
-                {templates.map(t => (
-                  <option key={t.id} value={t.id}>{t.name}</option>
-                ))}
-              </select>
-            </div>
+            {addMode === 'normal' && (
+              <>
+                <div className="w-48">
+                  <label className="block text-xs font-bold text-[#86868b] uppercase tracking-widest mb-2">期日</label>
+                  <input
+                    type="date"
+                    value={newDueDate}
+                    onChange={(e) => setNewDueDate(e.target.value)}
+                    className="mac-input w-full"
+                    required
+                  />
+                </div>
+                <div className="w-64">
+                  <label className="block text-xs font-bold text-[#86868b] uppercase tracking-widest mb-2">テンプレ (任意)</label>
+                  <select
+                    value={selectedTemplateId}
+                    onChange={(e) => setSelectedTemplateId(e.target.value)}
+                    className="mac-input w-full"
+                  >
+                    <option value="">なし</option>
+                    {templates.map(t => (
+                      <option key={t.id} value={t.id}>{t.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </>
+            )}
             <div className="flex gap-2">
               <button
                 type="submit"
@@ -433,7 +498,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, onSelectTask,
               </button>
               <button
                 type="button"
-                onClick={() => setIsAdding(false)}
+                onClick={() => { setIsAdding(false); setAddMode('normal'); }}
                 className="mac-button mac-button-secondary"
               >
                 キャンセル
@@ -554,6 +619,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, onSelectTask,
                       >
                         {task.name}
                       </span>
+                      {task.type === 'meeting' && <MeetingChip />}
                       {status === 'delayed' && <DelayBadge tone="danger" />}
                       {status === 'start_delayed' && <DelayBadge tone="warn" />}
                     </div>
@@ -619,6 +685,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, onSelectTask,
                           >
                             {task.name}
                           </span>
+                          {task.type === 'meeting' && <MeetingChip />}
                           {status === 'delayed' && <DelayBadge tone="danger" />}
                           {status === 'start_delayed' && <DelayBadge tone="warn" />}
                         </div>
@@ -847,6 +914,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, onSelectTask,
                                           <span className="font-bold text-[#1d1d1f] truncate">
                                             {task.name}
                                           </span>
+                                          {task.type === 'meeting' && <MeetingChip />}
                                           {statusMeta && (
                                             <span className={cn("flex items-center gap-1.5 flex-shrink-0 text-xs font-semibold", statusMeta.text)}>
                                               <span className={cn("w-1.5 h-1.5 rounded-full", statusMeta.dot)} />
@@ -969,6 +1037,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, onSelectTask,
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className="font-bold text-[15px] text-[#1d1d1f] truncate">{task.name}</span>
+                          {task.type === 'meeting' && <MeetingChip />}
                           {statusMeta && <DelayBadge tone={status === 'start_delayed' ? 'warn' : 'danger'} />}
                         </div>
                       </div>
@@ -1090,8 +1159,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, onSelectTask,
                               </div>
                             </div>
 
-                            <h3 className="text-base font-bold text-[#1d1d1f] group-hover:text-[#007aff] transition-colors mb-1.5 truncate">
-                              {task.name}
+                            <h3 className="text-base font-bold text-[#1d1d1f] group-hover:text-[#007aff] transition-colors mb-1.5 truncate flex items-center gap-2">
+                              <span className="truncate">{task.name}</span>
+                              {task.type === 'meeting' && <MeetingChip />}
                             </h3>
 
                             <div className="flex items-center gap-1.5 text-[13px] mb-4">
