@@ -2,16 +2,17 @@ import React, { useState, useEffect } from 'react';
 import { TaskTemplate, TemplateItem, Priority, SubTaskStatus } from '../types';
 import { taskService } from '../services/taskService';
 import { EditableCell } from './EditableCell';
-import { 
-  Plus, 
-  Trash2, 
+import {
+  Plus,
+  Trash2,
   ChevronLeft,
   Calendar,
   Clock,
   ChevronRight,
-  Save,
-  AlertCircle
+  AlertCircle,
+  GripVertical
 } from 'lucide-react';
+import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -87,6 +88,22 @@ export const TemplateManagement: React.FC = () => {
     await taskService.deleteTemplateItem(id);
   };
 
+  // ドラッグで並べ替え、order を採番し直して永続化する（案件一覧の子タスクと同様）。
+  const onDragEnd = async (result: DropResult) => {
+    if (!result.destination) return;
+    const items = Array.from(templateItems);
+    const [moved] = items.splice(result.source.index, 1);
+    items.splice(result.destination.index, 0, moved);
+    setTemplateItems(items); // 即時反映
+    try {
+      await Promise.all(
+        items.map((it, idx) => taskService.updateTemplateItem(it.id, { order: idx })),
+      );
+    } catch (err) {
+      console.error('Failed to reorder template items:', err);
+    }
+  };
+
   const statusColors: Record<SubTaskStatus, string> = {
     '遅れ': 'bg-red-100 text-red-700',
     '済': 'bg-green-100 text-green-700',
@@ -127,88 +144,116 @@ export const TemplateManagement: React.FC = () => {
 
         <div className="mac-card overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse min-w-[640px]">
+            <DragDropContext onDragEnd={onDragEnd}>
+            <table className="w-full text-left border-separate border-spacing-0 min-w-[680px]">
               <thead className="sticky top-[56px] lg:top-0 z-10">
                 <tr className="bg-gray-50 border-b border-gray-100">
-                  <th className="px-4 py-3 text-[10px] font-bold text-[#86868b] uppercase tracking-widest">システム</th>
-                  <th className="px-4 py-3 text-[10px] font-bold text-[#86868b] uppercase tracking-widest">タスク名</th>
-                  <th className="px-4 py-3 text-[10px] font-bold text-[#86868b] uppercase tracking-widest">ステータス</th>
-                  <th className="px-4 py-3 text-[10px] font-bold text-[#86868b] uppercase tracking-widest w-24">予定工数</th>
-                  <th className="px-4 py-3 text-[10px] font-bold text-[#86868b] uppercase tracking-widest w-24">優先度</th>
-                  <th className="px-4 py-3 text-[10px] font-bold text-[#86868b] uppercase tracking-widest">備考</th>
-                  <th className="px-4 py-3 text-[10px] font-bold text-[#86868b] uppercase tracking-widest w-16 text-center">操作</th>
+                  <th className="px-2 py-3 w-10" />
+                  <th className="px-4 py-3 text-[10px] font-bold text-[#86868b] uppercase tracking-widest border-b border-gray-100">システム</th>
+                  <th className="px-4 py-3 text-[10px] font-bold text-[#86868b] uppercase tracking-widest border-b border-gray-100">タスク名</th>
+                  <th className="px-4 py-3 text-[10px] font-bold text-[#86868b] uppercase tracking-widest border-b border-gray-100">ステータス</th>
+                  <th className="px-4 py-3 text-[10px] font-bold text-[#86868b] uppercase tracking-widest w-24 border-b border-gray-100">予定工数</th>
+                  <th className="px-4 py-3 text-[10px] font-bold text-[#86868b] uppercase tracking-widest w-24 border-b border-gray-100">優先度</th>
+                  <th className="px-4 py-3 text-[10px] font-bold text-[#86868b] uppercase tracking-widest border-b border-gray-100">備考</th>
+                  <th className="px-4 py-3 text-[10px] font-bold text-[#86868b] uppercase tracking-widest w-16 text-center border-b border-gray-100">操作</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-50">
-                {templateItems.map((item) => (
-                  <tr key={item.id} className="group hover:bg-gray-50 transition-colors">
-                    <td className="px-4 py-2">
-                      <EditableCell
-                        value={item.system}
-                        onSave={(val) => handleUpdateItem(item.id, { system: val as string })}
-                        className="text-sm"
-                        placeholder="システム名"
-                      />
-                    </td>
-                    <td className="px-4 py-2">
-                      <EditableCell
-                        value={item.task_name}
-                        onSave={(val) => handleUpdateItem(item.id, { task_name: val as string })}
-                        className="font-medium text-sm"
-                        placeholder="タスク名"
-                      />
-                    </td>
-                    <td className="px-4 py-2">
-                      <select
-                        value={item.status}
-                        onChange={(e) => handleUpdateItem(item.id, { status: e.target.value as SubTaskStatus })}
-                        className={cn(
-                          "px-2 py-0.5 rounded-md text-[10px] font-bold focus:outline-none",
-                          statusColors[item.status]
+              <Droppable droppableId="template-items">
+                {(provided) => (
+                  <tbody ref={provided.innerRef} {...provided.droppableProps}>
+                    {templateItems.map((item, index) => (
+                      <Draggable key={item.id} draggableId={item.id} index={index}>
+                        {(dragProvided, snapshot) => (
+                          <tr
+                            ref={dragProvided.innerRef}
+                            {...dragProvided.draggableProps}
+                            className={cn(
+                              "group hover:bg-gray-50 transition-colors",
+                              snapshot.isDragging && "bg-white shadow-lg"
+                            )}
+                          >
+                            <td className="px-2 py-2 border-b border-gray-50 text-center">
+                              <div
+                                {...dragProvided.dragHandleProps}
+                                className="inline-flex text-gray-300 hover:text-gray-600 cursor-grab active:cursor-grabbing"
+                                title="ドラッグで並べ替え"
+                              >
+                                <GripVertical size={16} />
+                              </div>
+                            </td>
+                            <td className="px-4 py-2 border-b border-gray-50">
+                              <EditableCell
+                                value={item.system}
+                                onSave={(val) => handleUpdateItem(item.id, { system: val as string })}
+                                className="text-sm"
+                                placeholder="システム名"
+                              />
+                            </td>
+                            <td className="px-4 py-2 border-b border-gray-50">
+                              <EditableCell
+                                value={item.task_name}
+                                onSave={(val) => handleUpdateItem(item.id, { task_name: val as string })}
+                                className="font-medium text-sm"
+                                placeholder="タスク名"
+                              />
+                            </td>
+                            <td className="px-4 py-2 border-b border-gray-50">
+                              <select
+                                value={item.status}
+                                onChange={(e) => handleUpdateItem(item.id, { status: e.target.value as SubTaskStatus })}
+                                className={cn(
+                                  "px-2 py-0.5 rounded-md text-[10px] font-bold focus:outline-none",
+                                  statusColors[item.status]
+                                )}
+                              >
+                                {Object.keys(statusColors).map(s => <option key={s} value={s}>{s}</option>)}
+                              </select>
+                            </td>
+                            <td className="px-4 py-2 border-b border-gray-50">
+                              <EditableCell
+                                type="number"
+                                value={isNaN(item.planned_hours) ? 0 : item.planned_hours}
+                                onSave={(val) => handleUpdateItem(item.id, { planned_hours: val as number })}
+                                className="w-16 text-sm"
+                              />
+                            </td>
+                            <td className="px-4 py-2 border-b border-gray-50">
+                              <select
+                                value={item.priority}
+                                onChange={(e) => handleUpdateItem(item.id, { priority: e.target.value as Priority })}
+                                className="bg-transparent focus:outline-none text-sm"
+                              >
+                                <option value="A">A</option>
+                                <option value="B">B</option>
+                                <option value="C">C</option>
+                              </select>
+                            </td>
+                            <td className="px-4 py-2 border-b border-gray-50">
+                              <EditableCell
+                                value={item.remarks || ''}
+                                onSave={(val) => handleUpdateItem(item.id, { remarks: val as string })}
+                                className="text-sm"
+                                placeholder="備考..."
+                              />
+                            </td>
+                            <td className="px-4 py-2 border-b border-gray-50 text-center">
+                              <button
+                                onClick={() => handleDeleteItem(item.id)}
+                                className="p-1.5 text-gray-300 hover:text-red-500 transition-colors"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </td>
+                          </tr>
                         )}
-                      >
-                        {Object.keys(statusColors).map(s => <option key={s} value={s}>{s}</option>)}
-                      </select>
-                    </td>
-                    <td className="px-4 py-2">
-                      <EditableCell
-                        type="number"
-                        value={isNaN(item.planned_hours) ? 0 : item.planned_hours}
-                        onSave={(val) => handleUpdateItem(item.id, { planned_hours: val as number })}
-                        className="w-16 text-sm"
-                      />
-                    </td>
-                    <td className="px-4 py-2">
-                      <select
-                        value={item.priority}
-                        onChange={(e) => handleUpdateItem(item.id, { priority: e.target.value as Priority })}
-                        className="bg-transparent focus:outline-none text-sm"
-                      >
-                        <option value="A">A</option>
-                        <option value="B">B</option>
-                        <option value="C">C</option>
-                      </select>
-                    </td>
-                    <td className="px-4 py-2">
-                      <EditableCell
-                        value={item.remarks || ''}
-                        onSave={(val) => handleUpdateItem(item.id, { remarks: val as string })}
-                        className="text-sm"
-                        placeholder="備考..."
-                      />
-                    </td>
-                    <td className="px-4 py-2 text-center">
-                      <button
-                        onClick={() => handleDeleteItem(item.id)}
-                        className="p-1.5 text-gray-300 hover:text-red-500 transition-colors"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
+                      </Draggable>
+                    ))}
+                    {provided.placeholder}
+                  </tbody>
+                )}
+              </Droppable>
             </table>
+            </DragDropContext>
           </div>
           
           {templateItems.length === 0 && (

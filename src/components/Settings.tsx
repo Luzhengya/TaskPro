@@ -1,16 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { UserSettings } from '../types';
 import { taskService } from '../services/taskService';
-import { 
-  Save, 
-  Cpu, 
-  Palette, 
-  Bell, 
-  Plus, 
+import { DEFAULT_ENABLED_VIEWS, ProjectView } from '../viewPrefs';
+import {
+  Save,
+  Cpu,
+  Palette,
+  Bell,
+  Plus,
   Trash2,
   CheckCircle2,
   LayoutGrid,
-  List
+  List,
+  FileText
 } from 'lucide-react';
 
 export const Settings: React.FC = () => {
@@ -99,40 +101,39 @@ export const Settings: React.FC = () => {
           </div>
           
           <div className="space-y-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <label className="block text-xs font-bold text-[#1d1d1f] mb-1">表示形式</label>
-                <p className="text-[10px] text-[#86868b]">ダッシュボードのレイアウトを選択</p>
-              </div>
-              <div className="flex p-1 bg-gray-100 rounded-xl">
-                <button
-                  onClick={() => setSettings({
-                    ...settings,
-                    ui_preferences: { ...settings.ui_preferences, view: 'grid' }
-                  })}
-                  className={`p-2 rounded-lg transition-all ${
-                    settings.ui_preferences.view === 'grid' 
-                      ? 'bg-white text-[#007aff] shadow-sm' 
-                      : 'text-[#86868b] hover:text-[#1d1d1f]'
-                  }`}
-                  title="グリッド表示"
-                >
-                  <LayoutGrid size={18} />
-                </button>
-                <button
-                  onClick={() => setSettings({
-                    ...settings,
-                    ui_preferences: { ...settings.ui_preferences, view: 'table' }
-                  })}
-                  className={`p-2 rounded-lg transition-all ${
-                    settings.ui_preferences.view === 'table' 
-                      ? 'bg-white text-[#007aff] shadow-sm' 
-                      : 'text-[#86868b] hover:text-[#1d1d1f]'
-                  }`}
-                  title="リスト表示"
-                >
-                  <List size={18} />
-                </button>
+            <div>
+              <label className="block text-xs font-bold text-[#1d1d1f] mb-1">プロジェクト画面の表示ビュー</label>
+              <p className="text-[10px] text-[#86868b] mb-3">表示に設定したビューだけがプロジェクト画面に出ます（最低1つ）。</p>
+              <div className="space-y-2">
+                {([
+                  { key: 'grid', label: 'グリッド', Icon: LayoutGrid },
+                  { key: 'table', label: 'テーブル', Icon: List },
+                  { key: 'weekly', label: '週報', Icon: FileText },
+                ] as { key: ProjectView; label: string; Icon: typeof LayoutGrid }[]).map(({ key, label, Icon }) => {
+                  const enabled = settings.ui_preferences.enabled_views ?? DEFAULT_ENABLED_VIEWS;
+                  const checked = enabled[key];
+                  const toggle = () => {
+                    const next = { ...enabled, [key]: !checked };
+                    // 最低1つは表示を残す。
+                    if (!next.grid && !next.table && !next.weekly) return;
+                    setSettings({
+                      ...settings,
+                      ui_preferences: { ...settings.ui_preferences, enabled_views: next },
+                    });
+                  };
+                  return (
+                    <div key={key} className="flex items-center justify-between p-3 bg-black/[0.02] rounded-xl border border-black/5">
+                      <div className="flex items-center gap-2.5">
+                        <Icon size={18} className="text-[#86868b]" />
+                        <span className="text-sm font-medium text-[#1d1d1f]">{label}</span>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" className="sr-only peer" checked={checked} onChange={toggle} />
+                        <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#007aff]"></div>
+                      </label>
+                    </div>
+                  );
+                })}
               </div>
             </div>
 

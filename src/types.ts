@@ -84,6 +84,8 @@ export interface UserSettings {
     opacity: number;
     theme: 'light' | 'dark';
     font: string;
+    /** プロジェクト画面で表示するビュー。未設定時は table のみ表示が既定。 */
+    enabled_views?: { grid: boolean; table: boolean; weekly: boolean };
   };
   notification_rules: NotificationRule[];
   created_at: string;

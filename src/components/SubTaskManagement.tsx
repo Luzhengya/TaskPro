@@ -506,25 +506,39 @@ export const SubTaskManagement: React.FC<SubTaskManagementProps> = ({ parentTask
                   >
                     {subTasks.map((task, index) => {
                       const isCompleted = task.status === '済';
-                      
+                      const isHighlighted = highlightTaskId === task.id;
+                      const LAST_COL = 12;
+
                       return (
                         <Draggable key={task.id} draggableId={task.id} index={index}>
                           {(provided) => (
-                            <tr 
+                            <tr
                               id={`task-${task.id}`}
                               ref={provided.innerRef}
                               {...provided.draggableProps}
                               className={cn(
                                 "group transition-colors",
-                                isCompleted ? "bg-[#f5f5f7]" : "hover:bg-gray-50",
-                                highlightTaskId === task.id && "ring-2 ring-[#007aff] ring-inset"
+                                isCompleted ? "bg-[#f5f5f7]" : "hover:bg-gray-50"
                               )}
                             >
                               {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(colIdx => {
                                 const isFrozen = frozenColumns.includes(colIdx);
                                 const left = getFrozenLeft(colIdx);
                                 const width = columnWidths[colIdx];
-                                
+
+                                // 選択ハイライトの枠線は <tr> に付けると固定列（不透明・高 z-index）に
+                                // 隠れてしまうため、各セルに上下＋両端の inset box-shadow として描く。
+                                let boxShadow: string | undefined;
+                                if (isHighlighted) {
+                                  const parts = [
+                                    'inset 0 2px 0 0 #007aff',
+                                    'inset 0 -2px 0 0 #007aff',
+                                  ];
+                                  if (colIdx === 0) parts.push('inset 2px 0 0 0 #007aff');
+                                  if (colIdx === LAST_COL) parts.push('inset -2px 0 0 0 #007aff');
+                                  boxShadow = parts.join(', ');
+                                }
+
                                 return (
                                   <td
                                     key={colIdx}
@@ -534,19 +548,25 @@ export const SubTaskManagement: React.FC<SubTaskManagementProps> = ({ parentTask
                                       maxWidth: width,
                                       left: isFrozen ? left : undefined,
                                       position: isFrozen ? 'sticky' : 'relative',
+                                      ...(boxShadow ? { boxShadow } : {}),
                                     }}
                                     className={cn(
                                       "px-4 py-2 border-b border-gray-50 transition-colors",
-                                      // z-index via class so focus-within can override inline style
-                                      isFrozen ? "z-30" : "z-[1]",
+                                      // z-index via class so focus-within can override inline style.
+                                      // ハイライト行は固定列より前面（z-40）にして枠線を確実に見せる。
+                                      isHighlighted ? "z-40" : isFrozen ? "z-30" : "z-[1]",
                                       // Raise above frozen columns (z-30) when a child has focus,
                                       // so focus rings/outlines aren't hidden by sticky neighbors
                                       "focus-within:!z-50",
                                       // Apply background colors to ALL cells (frozen and non-frozen) for consistency
                                       // Sticky cells need explicit bg, non-sticky cells get same bg to match
-                                      isCompleted ? "bg-[#f5f5f7]" : "bg-white group-hover:bg-gray-50",
-                                      isFrozen && "shadow-[1px_0_0_0_rgba(0,0,0,0.05)]",
-                                      isCompleted && !isFrozen && "opacity-60"
+                                      isHighlighted
+                                        ? "bg-blue-50/60"
+                                        : isCompleted
+                                          ? "bg-[#f5f5f7]"
+                                          : "bg-white group-hover:bg-gray-50",
+                                      isFrozen && !boxShadow && "shadow-[1px_0_0_0_rgba(0,0,0,0.05)]",
+                                      isCompleted && !isFrozen && !isHighlighted && "opacity-60"
                                     )}
                                   >
                                     {colIdx === 0 && (
