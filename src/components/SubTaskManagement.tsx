@@ -143,7 +143,8 @@ export const SubTaskManagement: React.FC<SubTaskManagementProps> = ({ parentTask
       status: '未着手',
       task_name: 'New Task',
       planned_hours: 0,
-      actual_hours: 0,
+      // actual_hours は意図的に未設定（undefined）にする。
+      // 「0 を明示」と「未入力」を区別するため、自動 0 埋めはしない。
       priority: 'B',
       remarks: '',
       week_number: 0,

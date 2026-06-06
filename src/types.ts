@@ -38,7 +38,9 @@ export interface SubTask {
   status: SubTaskStatus;
   task_name: string;
   planned_hours: number;
-  actual_hours: number;
+  /** 実績工数。未入力（undefined）と「0 を明示」を区別する。
+   *  作成・インポート時には初期値を入れない。「済」かつ undefined はリマインド対象。 */
+  actual_hours?: number;
   priority: Priority;
   remarks: string;
   delay_reason?: string;
@@ -99,8 +101,48 @@ export interface UserSettings {
     enabled_views?: { grid: boolean; table: boolean; weekly: boolean };
   };
   notification_rules: NotificationRule[];
+  /** ユーザー定義のクイックフィルタ。Dashboard 上部のチップとして並ぶ。
+   *  未設定（undefined）の場合は初回起動時に DEFAULT_QUICK_FILTERS で seed する。 */
+  quick_filters?: QuickFilter[];
+  /** 「期限間近」「開始間近」タブの判定に使う営業日数（土日を飛ばす）。
+   *  例: 1 → 今日〜「次の営業日」 までに期限/開始日が来る子タスクを持つ案件を該当扱い。
+   *  未設定なら既定 1。 */
+  near_threshold_days?: number;
   created_at: string;
   updated_at: string;
+}
+
+/* ============================================================
+ * タスク検索（Dashboard 詳細フィルタ・クイックフィルタの共通スキーマ）
+ * ============================================================ */
+
+/** 日付条件。enabled=false は「この日付では絞らない」。
+ *  mode='today' は「実行時の今日」（毎日今日に追従。北京時間で解決）。
+ *  mode='fixed' は固定の日付文字列。 */
+export type DateFilter =
+  | { enabled: false }
+  | { enabled: true; mode: 'today' }
+  | { enabled: true; mode: 'fixed'; date: string };
+
+/** タスク検索の条件。Dashboard で実行時に組み立てるほか、QuickFilter にも埋め込む。 */
+export interface TaskFilter {
+  keyword: string;
+  dueDate: DateFilter;
+  finalDeadline: DateFilter;
+  startDate: DateFilter;
+  /** 空配列 = 指定なし（全部 OK）。 */
+  priorities: Priority[];
+  /** 空配列 = 指定なし（全部 OK）。 */
+  statuses: SubTaskStatus[];
+  /** 空配列 = 指定なし（全部 OK）。 */
+  parentIds: string[];
+}
+
+/** Settings から作成・編集できる名前付きフィルタ。Dashboard のチップとして並ぶ。 */
+export interface QuickFilter {
+  id: string;
+  name: string;
+  filter: TaskFilter;
 }
 
 export interface NotificationRule {

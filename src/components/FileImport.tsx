@@ -135,6 +135,16 @@ export const FileImport: React.FC<FileImportProps> = ({ onImportComplete }) => {
             return isNaN(n) ? 0 : n;
           };
 
+          // セルが空 / 解釈不能の場合は undefined を返す（0 と「未入力」を区別したい
+          // フィールド用、特に actual_hours）。
+          const parseOptionalNumber = (val: unknown): number | undefined => {
+            if (val === undefined || val === null) return undefined;
+            const s = String(val).trim();
+            if (s === '') return undefined;
+            const n = Number(s);
+            return isNaN(n) ? undefined : n;
+          };
+
           const str = (row: unknown[], field: ImportField, fallback = '') => {
             const value = String(getRowValue(row, columnMap, field) ?? fallback).trim();
             return value || fallback;
@@ -204,7 +214,9 @@ export const FileImport: React.FC<FileImportProps> = ({ onImportComplete }) => {
                 status: (str(row, 'status', '未着手') || '未着手') as SubTaskStatus,
                 task_name: str(row, 'taskName'),
                 planned_hours: plannedHours,
-                actual_hours: parseNumber(
+                // 空セルは undefined のまま（自動 0 埋めをしない）。
+                // 「0 を明示」と「未入力」を区別して、リマインド（実績未入力）で検出する。
+                actual_hours: parseOptionalNumber(
                   getRowValue(row, columnMap, 'actualHours'),
                 ),
                 priority: (str(row, 'priority', 'B') || 'B') as Priority,
