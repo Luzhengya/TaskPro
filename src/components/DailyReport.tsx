@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { SubTask, ParentTask, SubTaskStatus, DailyReportSnapshot, Priority } from '../types';
 import { taskService } from '../services/taskService';
-import { aiService } from '../services/aiService';
 import {
   Sparkles,
   Calendar,
@@ -9,7 +8,6 @@ import {
   Download,
   Trash2,
   Loader2,
-  RefreshCw,
   AlertCircle,
   Copy,
   BarChart3,
@@ -32,6 +30,7 @@ import {
   CONFIRMED_CATEGORY_ORDER,
   ConfirmedCategory,
   buildConfirmedDisplayData,
+  buildDailyReportSummary,
   buildDisplayData,
   extractDailyReportCandidates,
 } from '../dailyReportSelector';
@@ -162,7 +161,6 @@ export const DailyReport: React.FC<DailyReportProps> = ({
 
   // UI state
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitFeedback, setSubmitFeedback] = useState<string | null>(null);
 
@@ -664,26 +662,8 @@ export const DailyReport: React.FC<DailyReportProps> = ({
     }
   };
 
-  // Generate AI summary
-  const handleGenerateSummary = async () => {
-    setIsGenerating(true);
-    setError(null);
-    try {
-      const delayedTasks = reportTasks.filter(
-        t => t.status === '遅れ' || t.status === '期限遅れ'
-      );
-      const res = await aiService.generateSummary({
-        today: reportTasks,
-        unfinished: [],
-        delayed: delayedTasks,
-      });
-      setSummary(res);
-    } catch (err: any) {
-      setError(err.message || 'Failed to generate summary.');
-    } finally {
-      setIsGenerating(false);
-    }
-  };
+  // 手動「再生成」機能は廃止。Summary は「確定」ボタンを押した時にだけ生成される
+  // （handleConfirm 内で snapshot vs 現状の diff から組み立てる）。
 
   // 自動抽出：「リセット → 再抽出」の 2 段階。
   //   1. is_in_report=true な既存タスクを全て false にクリア（visible 親配下のみ）
@@ -806,11 +786,8 @@ export const DailyReport: React.FC<DailyReportProps> = ({
     }
   };
 
-  // 編集モードの確定：snapshot vs 現状 を diff し、AI でサマリー生成 → 編集モード解除。
-  //   - 完了 / 進行中 / 遅延 / 新規追加 / 削除 / 工数更新 / ステータス変更 を抽出
-  //   - 日本語の構造化プロンプトを組み立てて aiService.generate に投げる
-  //   - 生成テキストを setSummary で本日サマリーとして表示
-  //   - API key 未設定や生成失敗時はテンプレ summary でフォールバック
+  // 編集モードの確定：snapshot（編集前）vs 現状（編集後）を比較し、
+  // テンプレート方式で日報サマリーを生成 → 編集モード解除（snapshot は保持）。
   const handleConfirm = async () => {
     if (isHistoryMode) return;
     if (isConfirming) return;
@@ -820,106 +797,12 @@ export const DailyReport: React.FC<DailyReportProps> = ({
       const currentReportTasks = allSubTasks.filter(
         t => t.is_in_report && parentMap.has(t.parent_task_id),
       );
-
-      // 差分カテゴリに分類
-      const completed: { before: SubTask; after: SubTask }[] = []; // snapshot で非済 → 現状で済
-      const stillInProgress: { before: SubTask | null; after: SubTask }[] = [];
-      const stillDelayed: { before: SubTask | null; after: SubTask }[] = [];
-      const notStarted: { before: SubTask | null; after: SubTask }[] = [];
-      const newlyAdded: SubTask[] = []; // snapshot に無いが現状にある
-      const removed: SubTask[] = [];    // snapshot にあるが現状に無い（uncheck）
-
-      const snapshotIds = new Set(Object.keys(editSnapshot));
-      const currentIds = new Set(currentReportTasks.map(t => t.id));
-
-      for (const t of currentReportTasks) {
-        const before = editSnapshot[t.id] ?? null;
-        if (!before) newlyAdded.push(t);
-        if (t.status === '済') {
-          if (before && before.status !== '済') completed.push({ before, after: t });
-          else if (!before) completed.push({ before: t, after: t });
-        } else if (t.status === '遅れ' || t.status === '期限遅れ' || t.status === '着手遅れ') {
-          stillDelayed.push({ before, after: t });
-        } else if (t.status === '進行中') {
-          stillInProgress.push({ before, after: t });
-        } else {
-          notStarted.push({ before, after: t });
-        }
-      }
-      for (const id of snapshotIds) {
-        if (!currentIds.has(id)) removed.push(editSnapshot[id]);
-      }
-
-      // プロンプト組み立て（日本語、構造化）
-      const fmtTask = (t: SubTask) => {
-        const parentName = parentMap.get(t.parent_task_id)?.name ?? '(案件不明)';
-        return `[${parentName}] ${t.task_name}（${t.status}, 予定 ${t.planned_hours ?? 0}h / 実績 ${t.actual_hours ?? 0}h）`;
-      };
-      const fmtDiff = (before: SubTask | null, after: SubTask) => {
-        if (!before) return `${fmtTask(after)} ※新規追加`;
-        const changes: string[] = [];
-        if (before.status !== after.status) changes.push(`状態 ${before.status}→${after.status}`);
-        if ((before.actual_hours ?? 0) !== (after.actual_hours ?? 0)) {
-          changes.push(`実績 ${before.actual_hours ?? 0}h→${after.actual_hours ?? 0}h`);
-        }
-        if (before.remarks !== after.remarks && after.remarks) {
-          changes.push(`備考更新`);
-        }
-        return changes.length > 0 ? `${fmtTask(after)} [${changes.join(' / ')}]` : fmtTask(after);
-      };
-
-      const section = (label: string, lines: string[]) =>
-        lines.length > 0 ? `【${label}】\n${lines.join('\n')}` : '';
-
-      const prompt = [
-        `あなたは業務日報を作成するアシスタントです。以下のタスク状況をもとに、簡潔で読みやすい日本語の日報サマリーを Markdown 形式で作成してください。`,
-        '',
-        `日付: ${today}`,
-        '',
-        section('完了したタスク', completed.map(p => fmtDiff(p.before, p.after))),
-        section('進行中のタスク', stillInProgress.map(p => fmtDiff(p.before, p.after))),
-        section('遅延中のタスク', stillDelayed.map(p => fmtDiff(p.before, p.after))),
-        section('未着手のタスク', notStarted.map(p => fmtDiff(p.before, p.after))),
-        section('編集中に追加されたタスク', newlyAdded.map(t => fmtTask(t))),
-        section('編集中に外されたタスク（取消）', removed.map(t => fmtTask(t))),
-        '',
-        `## 出力フォーマット要件`,
-        `1. ## 完了したこと`,
-        `2. ## 進行中・継続`,
-        `3. ## 課題・遅延`,
-        `4. ## 明日の予定（未着手のタスクから推測）`,
-        `各セクションは 1-3 行程度で簡潔に。タスク名と状態を引用しつつ、ビジネス文体で。`,
-      ].filter(Boolean).join('\n');
-
-      // AI 呼出。失敗時はテンプレでフォールバック
-      let summaryText = '';
-      try {
-        summaryText = await aiService.generate(prompt);
-      } catch (aiErr) {
-        console.warn('AI summary failed, using fallback:', aiErr);
-        summaryText = [
-          `## 完了したこと`,
-          completed.length > 0
-            ? completed.map(p => `- ${p.after.task_name}`).join('\n')
-            : '- なし',
-          ``,
-          `## 進行中・継続`,
-          stillInProgress.length > 0
-            ? stillInProgress.map(p => `- ${p.after.task_name}（${p.after.status}）`).join('\n')
-            : '- なし',
-          ``,
-          `## 課題・遅延`,
-          stillDelayed.length > 0
-            ? stillDelayed.map(p => `- ${p.after.task_name}（${p.after.status}）`).join('\n')
-            : '- なし',
-          ``,
-          `## 明日の予定`,
-          notStarted.length > 0
-            ? notStarted.map(p => `- ${p.after.task_name}`).join('\n')
-            : '- なし',
-        ].join('\n');
-      }
-
+      const summaryText = buildDailyReportSummary(
+        currentReportTasks,
+        editSnapshot,
+        parentMap,
+        today,
+      );
       setSummary(summaryText);
       // 確定後の「完了」判定で snapshot を引き続き使うため、ここではクリアしない。
       // 提出 / 再抽出 / キャンセルの時に初めてクリアする。
@@ -938,22 +821,11 @@ export const DailyReport: React.FC<DailyReportProps> = ({
     setIsSubmitting(true);
     setSubmitFeedback(null);
     try {
-      // Generate summary first if missing
+      // サマリーが空（＝確定を経ずに直接提出）の場合はテンプレートで生成しておく。
       let finalSummary = summary;
       if (!finalSummary.trim()) {
-        try {
-          const delayedTasks = reportTasks.filter(
-            t => t.status === '遅れ' || t.status === '期限遅れ'
-          );
-          finalSummary = await aiService.generateSummary({
-            today: reportTasks,
-            unfinished: [],
-            delayed: delayedTasks,
-          });
-          setSummary(finalSummary);
-        } catch (e) {
-          console.warn('AI summary generation failed, saving without it:', e);
-        }
+        finalSummary = buildDailyReportSummary(reportTasks, editSnapshot, parentMap, today);
+        setSummary(finalSummary);
       }
 
       await taskService.saveDailyReport({
@@ -1002,7 +874,7 @@ export const DailyReport: React.FC<DailyReportProps> = ({
       lines.push('');
     }
     if (summary.trim()) {
-      lines.push('--- AI Summary ---');
+      lines.push('--- Summary ---');
       lines.push(summary);
     }
     const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' });
@@ -1579,25 +1451,13 @@ export const DailyReport: React.FC<DailyReportProps> = ({
       </div>
       )}
 
-      {/* AI Summary（編集モード中は非表示） */}
+      {/* Summary（編集モード中は非表示）。生成は「確定」ボタン押下時のみ。手動再生成は廃止。 */}
       {!editMode && (
       <div className="bg-[#007aff] text-white rounded-2xl lg:rounded-[20px] p-4 lg:p-6 shadow-lg relative overflow-hidden">
         <div className="relative z-10">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-2">
-              <Sparkles size={22} />
-              <h3 className="text-lg font-bold">AI Summary</h3>
-            </div>
-            {!isHistoryMode && (
-              <button
-                onClick={handleGenerateSummary}
-                disabled={isGenerating}
-                className="p-2 bg-white/10 hover:bg-white/20 rounded-lg transition-colors disabled:opacity-50"
-                title="再生成"
-              >
-                {isGenerating ? <Loader2 size={18} className="animate-spin" /> : <RefreshCw size={18} />}
-              </button>
-            )}
+          <div className="flex items-center gap-2 mb-4">
+            <Sparkles size={22} />
+            <h3 className="text-lg font-bold">Summary</h3>
           </div>
           {error && (
             <div className="mb-4 p-3 bg-red-500/20 rounded-lg text-xs border border-red-500/30 flex items-center gap-2">
@@ -1618,20 +1478,11 @@ export const DailyReport: React.FC<DailyReportProps> = ({
             </div>
           ) : (
             <div className="text-center py-8">
-              <p className="text-white/60 italic text-sm mb-4">
+              <p className="text-white/60 italic text-sm">
                 {isHistoryMode
-                  ? 'この日のAIサマリーは保存されていません。'
-                  : '右上の更新ボタン、または「日報を提出」で自動生成されます。'}
+                  ? 'この日のサマリーは保存されていません。'
+                  : '「確定」ボタンを押すとサマリーが自動生成されます。'}
               </p>
-              {!isHistoryMode && (
-                <button
-                  onClick={handleGenerateSummary}
-                  disabled={isGenerating}
-                  className="px-5 py-2 bg-white text-[#007aff] rounded-lg font-bold hover:bg-gray-100 transition-all disabled:opacity-50 text-sm"
-                >
-                  {isGenerating ? '生成中...' : '今すぐ生成'}
-                </button>
-              )}
             </div>
           )}
         </div>

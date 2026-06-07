@@ -456,5 +456,131 @@ export function buildConfirmedDisplayData(
   return { byCategory, counts };
 }
 
+/* ============================================================
+ * 日報サマリー生成（テンプレート方式 + 前後比較）
+ * ============================================================
+ *
+ * 「確定」ボタン押下時に snapshot（編集前）と現状（編集後）を比較し、
+ * 状態遷移に応じた定型文でサマリーを組み立てる。AI は使わない（安定・無料・高速）。
+ *
+ * 状態遷移ルール（before → after）：
+ *   - 未着手 / 進行中 → 済 : 「予定通り完了しました」
+ *   - 遅延系       → 済 : 「遅れていましたが完了しました」
+ *   - その他       → 済 : 「完了しました」（snapshot 無し等）
+ *   - 非遅延       → 遅延系 : 「本日発生」
+ *   - 遅延系       → 遅延系 : 「継続中」
+ *
+ * タスク名は「【親案件】子タスク」形式。
+ */
+
+const DELAY_STATUSES: SubTaskStatus[] = ['遅れ', '期限遅れ', '着手遅れ'];
+
+export function buildDailyReportSummary(
+  reportTasks: SubTask[],
+  snapshot: Record<string, SubTask>,
+  parentMap: Map<string, ParentTask>,
+  overrideToday?: string,
+): string {
+  const today = overrideToday ?? todayBeijing();
+  const startNearHorizon = addBusinessDays(today, 1);
+
+  // 「【親案件】子タスク」
+  const fmtName = (t: SubTask) => {
+    const parentName = parentMap.get(t.parent_task_id)?.name ?? '案件不明';
+    return `【${parentName}】${t.task_name}`;
+  };
+
+  // 遅延タスクの「本日発生 / 継続中」判定（前後比較）
+  const delayNote = (t: SubTask): string => {
+    const before = snapshot[t.id];
+    if (before && DELAY_STATUSES.includes(before.status)) return '継続中';
+    return '本日発生';
+  };
+
+  // 完了タスクの完了文言（前後比較）
+  const completeNote = (t: SubTask): string => {
+    const before = snapshot[t.id];
+    if (!before) return '完了しました';
+    if (before.status === '未着手' || before.status === '進行中') return '予定通り完了しました';
+    if (DELAY_STATUSES.includes(before.status)) return '遅れていましたが完了しました';
+    return '完了しました';
+  };
+
+  // カテゴリ分類
+  const overdueFinal: SubTask[] = [];
+  const overdue: SubTask[] = [];
+  const overdueStart: SubTask[] = [];
+  const completed: SubTask[] = [];
+  const inProgress: SubTask[] = [];
+  const startingPlanned: SubTask[] = [];
+
+  for (const t of reportTasks) {
+    if (t.status === '期限遅れ') overdueFinal.push(t);
+    else if (t.status === '遅れ') overdue.push(t);
+    else if (t.status === '着手遅れ') overdueStart.push(t);
+    else if (t.status === '済') {
+      const before = snapshot[t.id];
+      if (!before || before.status !== '済') completed.push(t);
+    } else if (t.status === '進行中') inProgress.push(t);
+    else if (t.status === '未着手') {
+      const sd = normalizeDate(t.start_date);
+      if (sd && sd > today && sd <= startNearHorizon) startingPlanned.push(t);
+    }
+  }
+
+  const total =
+    overdueFinal.length + overdue.length + overdueStart.length +
+    completed.length + inProgress.length + startingPlanned.length;
+
+  const lines: string[] = [];
+
+  // ヘッダー（総数 + 内訳）
+  lines.push(`本日 ${total} 件のタスクを対応しています。`);
+  lines.push(
+    `内訳：期限遅れ ${overdueFinal.length} 件、遅れ ${overdue.length} 件、` +
+    `着手遅れ ${overdueStart.length} 件、完了 ${completed.length} 件、進行中 ${inProgress.length} 件。`,
+  );
+  lines.push('');
+
+  // 遅延系セクション（原因付き）
+  const delaySection = (label: string, tasks: SubTask[]) => {
+    if (tasks.length === 0) return;
+    lines.push(`## ${label}`);
+    for (const t of tasks) {
+      lines.push(`- ${fmtName(t)}（${delayNote(t)}）`);
+      const reason = (t.delay_reason ?? '').trim();
+      const impact = t.delay_impact_days ? `（影響 ${t.delay_impact_days} 日）` : '';
+      lines.push(`  原因: ${reason || '（原因未記入）'}${impact}`);
+    }
+    lines.push('');
+  };
+  delaySection('期限遅れ', overdueFinal);
+  delaySection('遅れ', overdue);
+  delaySection('着手遅れ', overdueStart);
+
+  // 本日完了
+  if (completed.length > 0) {
+    lines.push('## 本日完了');
+    for (const t of completed) {
+      lines.push(`- ${fmtName(t)} ${completeNote(t)}`);
+    }
+    lines.push('');
+  }
+
+  // 本日の予定（進行中の継続 + 明日着手予定）
+  if (inProgress.length > 0 || startingPlanned.length > 0) {
+    lines.push('## 本日の予定');
+    for (const t of inProgress) {
+      lines.push(`- ${fmtName(t)} を引き続き対応します`);
+    }
+    for (const t of startingPlanned) {
+      lines.push(`- ${fmtName(t)} に着手予定です`);
+    }
+    lines.push('');
+  }
+
+  return lines.join('\n').trim();
+}
+
 // 後方互換のため type を再エクスポート（unused import 警告防止）
 export type { SubTaskStatus };
