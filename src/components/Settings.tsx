@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { UserSettings } from '../types';
+import { ParentTask, QuickFilter, TaskFilter, UserSettings } from '../types';
 import { taskService } from '../services/taskService';
 import { DEFAULT_ENABLED_VIEWS, ProjectView } from '../viewPrefs';
+import { defaultQuickFilters, EMPTY_FILTER, summarizeFilter } from '../taskFilter';
+import { FilterForm } from './FilterForm';
 import {
   Save,
   Cpu,
@@ -12,18 +14,89 @@ import {
   CheckCircle2,
   LayoutGrid,
   List,
-  FileText
+  FileText,
+  AlertTriangle,
+  Search,
+  Pencil,
 } from 'lucide-react';
 
 export const Settings: React.FC = () => {
   const [settings, setSettings] = useState<UserSettings | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
+  // 全タスク削除の対象件数（表示中の親タスク = is_hidden=false）。
+  // 0 件のときはボタンを非活性にしておきたいので件数を購読する。
+  const [visibleParentCount, setVisibleParentCount] = useState(0);
+  const [isClearingAll, setIsClearingAll] = useState(false);
+
+  // クイックフィルタ編集用。親案件選択肢のため visible parents の一覧も持つ。
+  const [parentTasks, setParentTasks] = useState<ParentTask[]>([]);
+  const [editingQuickFilter, setEditingQuickFilter] = useState<QuickFilter | null>(null);
+  const [deletingQuickFilterId, setDeletingQuickFilterId] = useState<string | null>(null);
 
   useEffect(() => {
     const unsubscribe = taskService.subscribeSettings(setSettings);
-    return () => unsubscribe();
+    const unsubscribeParents = taskService.subscribeParentTasks((list: ParentTask[]) => {
+      setVisibleParentCount(list.length);
+      setParentTasks(list);
+    });
+    return () => {
+      unsubscribe();
+      unsubscribeParents();
+    };
   }, []);
+
+  // 初回 seed：settings 取得済みかつ quick_filters が未定義なら、内蔵 3 件を入れて保存する。
+  // 一度入った後はユーザーが削除/編集できる。空配列で保存されている場合は seed しない（意図的に空）。
+  useEffect(() => {
+    if (!settings) return;
+    if (settings.quick_filters !== undefined) return;
+    const seeded = defaultQuickFilters();
+    taskService
+      .updateSettings(settings.id, { ...settings, quick_filters: seeded })
+      .catch(err => console.error('Failed to seed quick filters:', err));
+    // setSettings は subscribe 経由で自動更新されるため、ここでは触らない。
+  }, [settings]);
+
+  const updateQuickFilters = async (next: QuickFilter[]) => {
+    if (!settings) return;
+    try {
+      await taskService.updateSettings(settings.id, { ...settings, quick_filters: next });
+    } catch (err) {
+      console.error('Failed to update quick filters:', err);
+    }
+  };
+
+  const saveQuickFilter = async (qf: QuickFilter) => {
+    if (!settings) return;
+    const list = settings.quick_filters ?? [];
+    const exists = list.some(x => x.id === qf.id);
+    const next = exists ? list.map(x => (x.id === qf.id ? qf : x)) : [...list, qf];
+    await updateQuickFilters(next);
+    setEditingQuickFilter(null);
+  };
+
+  const deleteQuickFilter = async (id: string) => {
+    if (!settings) return;
+    const next = (settings.quick_filters ?? []).filter(x => x.id !== id);
+    await updateQuickFilters(next);
+    setDeletingQuickFilterId(null);
+  };
+
+  const startNewQuickFilter = () => {
+    setEditingQuickFilter({
+      id: `qf-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      name: '',
+      filter: { ...EMPTY_FILTER },
+    });
+  };
+
+  const confirmClearAll = () => {
+    setIsClearingAll(false);
+    taskService.clearAllData().catch(err => {
+      console.error('Failed to clear data:', err);
+    });
+  };
 
   const handleSave = async () => {
     if (!settings) return;
@@ -104,6 +177,31 @@ export const Settings: React.FC = () => {
           </div>
           
           <div className="space-y-6">
+            {/* 「期限間近」「開始間近」タブの判定しきい値（営業日）。 */}
+            <div>
+              <label className="block text-xs font-bold text-[#1d1d1f] mb-1">
+                「期限間近・開始間近」タブの判定（営業日）
+              </label>
+              <p className="text-[10px] text-[#86868b] mb-3">
+                今日からこの営業日数以内に「期限」または「開始日」が来るタスクを持つ案件を「間近」扱いにします（土日スキップ）。
+              </p>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={0}
+                  max={30}
+                  value={settings.near_threshold_days ?? 1}
+                  onChange={(e) => {
+                    const raw = parseInt(e.target.value, 10);
+                    const v = isNaN(raw) ? 1 : Math.max(0, Math.min(30, raw));
+                    setSettings({ ...settings, near_threshold_days: v });
+                  }}
+                  className="mac-input w-24 text-sm"
+                />
+                <span className="text-xs text-[#86868b]">営業日（0〜30）</span>
+              </div>
+            </div>
+
             <div>
               <label className="block text-xs font-bold text-[#1d1d1f] mb-1">プロジェクト画面の表示ビュー</label>
               <p className="text-[10px] text-[#86868b] mb-3">表示に設定したビューだけがプロジェクト画面に出ます（最低1つ）。</p>
@@ -190,6 +288,252 @@ export const Settings: React.FC = () => {
             </button>
           </div>
         </section>
+
+        {/* クイックフィルタ管理。Dashboard 上部のチップになる。 */}
+        <section className="mac-card p-5 lg:p-8 md:col-span-2">
+          <div className="flex items-center gap-3 mb-2">
+            <div className="p-2 bg-blue-50 text-[#007aff] rounded-xl">
+              <Search size={24} />
+            </div>
+            <h3 className="text-xl font-bold text-[#1d1d1f]">クイックフィルタ</h3>
+            <button
+              onClick={startNewQuickFilter}
+              className="ml-auto mac-button mac-button-secondary flex items-center gap-1.5 text-xs"
+            >
+              <Plus size={14} />
+              <span>新規作成</span>
+            </button>
+          </div>
+          <p className="text-xs text-[#86868b] mb-4 pl-12">
+            プロジェクト画面の上部に「クイックチップ」として並びます。タップ一発で「今日が期日」「優先A・未完」などの条件をかけられます。
+          </p>
+
+          <div className="space-y-2">
+            {(settings.quick_filters ?? []).length === 0 ? (
+              <p className="text-xs text-[#86868b] italic pl-12">
+                クイックフィルタがありません。「新規作成」から追加してください。
+              </p>
+            ) : (
+              (settings.quick_filters ?? []).map(qf => (
+                <div
+                  key={qf.id}
+                  className="flex items-center gap-3 p-3 bg-black/[0.02] rounded-xl border border-black/5"
+                >
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-bold text-[#1d1d1f] truncate">
+                      {qf.name || '(無題)'}
+                    </p>
+                    <p className="text-[10px] text-[#86868b] truncate" title={summarizeFilter(qf.filter)}>
+                      {summarizeFilter(qf.filter)}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setEditingQuickFilter(qf)}
+                    className="p-2 text-[#86868b] hover:text-[#007aff] hover:bg-blue-50 rounded-lg transition-colors"
+                    title="編集"
+                    aria-label="クイックフィルタを編集"
+                  >
+                    <Pencil size={16} />
+                  </button>
+                  <button
+                    onClick={() => setDeletingQuickFilterId(qf.id)}
+                    className="p-2 text-gray-300 hover:text-red-500 transition-colors"
+                    title="削除"
+                    aria-label="クイックフィルタを削除"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        </section>
+
+        {/* 危険な操作（全タスク削除）。元は案件一覧にあったが、誤タップ防止のため設定画面へ移動。 */}
+        <section className="mac-card p-5 lg:p-8 md:col-span-2 border border-red-200">
+          <div className="flex items-center gap-3 mb-2">
+            <div className="p-2 bg-red-50 text-red-600 rounded-xl">
+              <AlertTriangle size={24} />
+            </div>
+            <h3 className="text-xl font-bold text-[#1d1d1f]">危険な操作</h3>
+          </div>
+          <p className="text-xs text-[#86868b] mb-4 pl-12">
+            表示中の案件と紐づく子タスクをまとめて削除します。履歴（非表示の案件）・テンプレート・日報は削除されません。
+          </p>
+          <div className="pl-12">
+            <button
+              onClick={() => setIsClearingAll(true)}
+              disabled={visibleParentCount === 0}
+              className="mac-button mac-button-secondary flex items-center gap-2 text-sm text-[#ff3b30] disabled:opacity-40"
+              title={
+                visibleParentCount === 0
+                  ? '削除対象の案件がありません。'
+                  : `表示中の ${visibleParentCount} 件の案件と関連タスクを削除`
+              }
+            >
+              <Trash2 size={18} />
+              <span>全タスク削除</span>
+              {visibleParentCount > 0 && (
+                <span className="text-[10px] font-bold text-[#86868b]">（{visibleParentCount} 件）</span>
+              )}
+            </button>
+          </div>
+        </section>
+      </div>
+
+      {isClearingAll && (
+        <div className="fixed inset-0 bg-black/20 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="mac-card max-w-sm w-full p-6 shadow-2xl animate-in zoom-in-95 duration-200">
+            <div className="flex items-center gap-3 text-red-600 mb-4">
+              <AlertTriangle size={24} />
+              <h3 className="text-lg font-bold">削除の確認</h3>
+            </div>
+            <p className="text-[#1d1d1f] mb-6">
+              全てのタスク（親タスク・子タスク）を削除しますか？この操作は取り消せません。
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={confirmClearAll}
+                className="flex-1 py-2.5 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 transition-colors"
+              >
+                削除する
+              </button>
+              <button
+                onClick={() => setIsClearingAll(false)}
+                className="flex-1 py-2.5 bg-gray-100 text-[#1d1d1f] rounded-xl font-bold hover:bg-gray-200 transition-colors"
+              >
+                キャンセル
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editingQuickFilter && (
+        <QuickFilterEditor
+          quickFilter={editingQuickFilter}
+          parentTasks={parentTasks}
+          onChange={setEditingQuickFilter}
+          onSave={saveQuickFilter}
+          onCancel={() => setEditingQuickFilter(null)}
+        />
+      )}
+
+      {deletingQuickFilterId && (
+        <div className="fixed inset-0 bg-black/20 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="mac-card max-w-sm w-full p-6 shadow-2xl animate-in zoom-in-95 duration-200">
+            <div className="flex items-center gap-3 text-red-600 mb-4">
+              <AlertTriangle size={24} />
+              <h3 className="text-lg font-bold">削除の確認</h3>
+            </div>
+            <p className="text-[#1d1d1f] mb-6">
+              このクイックフィルタを削除しますか？
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => deleteQuickFilter(deletingQuickFilterId)}
+                className="flex-1 py-2.5 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 transition-colors"
+              >
+                削除する
+              </button>
+              <button
+                onClick={() => setDeletingQuickFilterId(null)}
+                className="flex-1 py-2.5 bg-gray-100 text-[#1d1d1f] rounded-xl font-bold hover:bg-gray-200 transition-colors"
+              >
+                キャンセル
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* ============================================================
+ * クイックフィルタ編集モーダル（新規作成 / 編集 兼用）
+ * ============================================================ */
+
+interface QuickFilterEditorProps {
+  quickFilter: QuickFilter;
+  parentTasks: ParentTask[];
+  onChange: (next: QuickFilter) => void;
+  onSave: (qf: QuickFilter) => Promise<void> | void;
+  onCancel: () => void;
+}
+
+const QuickFilterEditor: React.FC<QuickFilterEditorProps> = ({
+  quickFilter,
+  parentTasks,
+  onChange,
+  onSave,
+  onCancel,
+}) => {
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    if (!quickFilter.name.trim()) return;
+    setSaving(true);
+    try {
+      await onSave({ ...quickFilter, name: quickFilter.name.trim() });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const setName = (name: string) => onChange({ ...quickFilter, name });
+  const setFilter = (filter: TaskFilter) => onChange({ ...quickFilter, filter });
+
+  return (
+    <div
+      className="fixed inset-0 bg-black/30 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+      onClick={onCancel}
+    >
+      <div
+        className="mac-card max-w-lg w-full max-h-[90vh] flex flex-col shadow-2xl animate-in zoom-in-95 duration-200"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-2 p-5 border-b border-black/5">
+          <div className="p-1.5 bg-blue-50 text-[#007aff] rounded-lg">
+            <Search size={18} />
+          </div>
+          <h3 className="text-base font-bold text-[#1d1d1f]">クイックフィルタを編集</h3>
+        </div>
+        <div className="flex-1 overflow-auto p-5 space-y-4">
+          <div>
+            <label className="block text-xs font-bold text-[#1d1d1f] mb-2">名前</label>
+            <input
+              type="text"
+              value={quickFilter.name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="例: 今日が期日・未完"
+              className="mac-input w-full text-sm"
+              autoFocus
+            />
+          </div>
+          <FilterForm
+            value={quickFilter.filter}
+            onChange={setFilter}
+            parentTasks={parentTasks}
+            preferDynamicToday
+          />
+        </div>
+        <div className="flex gap-2 p-5 border-t border-black/5">
+          <button
+            onClick={handleSave}
+            disabled={saving || !quickFilter.name.trim()}
+            className="flex-1 py-2.5 bg-[#007aff] text-white rounded-xl font-bold hover:bg-[#0066d6] transition-colors disabled:opacity-50"
+          >
+            {saving ? '保存中...' : '保存'}
+          </button>
+          <button
+            onClick={onCancel}
+            disabled={saving}
+            className="flex-1 py-2.5 bg-gray-100 text-[#1d1d1f] rounded-xl font-bold hover:bg-gray-200 transition-colors disabled:opacity-50"
+          >
+            キャンセル
+          </button>
+        </div>
       </div>
     </div>
   );

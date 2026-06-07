@@ -11,8 +11,9 @@ import { DailyReport } from './components/DailyReport';
 import { Settings } from './components/Settings';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { taskService } from './services/taskService';
-import { ParentTask, UserSettings } from './types';
+import { ParentTask, SubTask, UserSettings } from './types';
 import { todayBeijing } from './dateUtils';
+import { findAnomalies } from './dailyReportSelector';
 import { Loader2 } from 'lucide-react';
 
 /** CloudBase 認証エラーを、ログインフォームに表示する日本語メッセージへ変換する。 */
@@ -52,6 +53,12 @@ export default function App() {
   const [selectedParentTask, setSelectedParentTask] = useState<ParentTask | null>(null);
   const [highlightTaskId, setHighlightTaskId] = useState<string | null>(null);
   const [parentTasks, setParentTasks] = useState<ParentTask[]>([]);
+  // 履歴行き（is_hidden=true）の親タスク。日報履歴から「履歴行きプロジェクト」へ
+  // ジャンプするときの参照元。Dashboard 側の表示には使わない。
+  const [hiddenParentTasks, setHiddenParentTasks] = useState<ParentTask[]>([]);
+  // 全子タスク。元は Dashboard / DailyReport が個別に subscribe していたが、
+  // 重複 fetch を避けて App.tsx に集約。props で配下に渡す。
+  const [allSubTasks, setAllSubTasks] = useState<SubTask[]>([]);
   const [settings, setSettings] = useState<UserSettings | null>(null);
   // 日報メニューに出す件数（is_in_report のタスク数）。
   const [reportCount, setReportCount] = useState(0);
@@ -92,20 +99,23 @@ export default function App() {
     if (user || isGuest) {
       taskService.testConnection();
 
-      // 日報メニューの件数バッジ。is_in_report=true に加えて、
-      // 「会議集（親 type==='meeting'）の子タスクで開始日が今日」のものも
-      // DailyReport 側で自動表示するので、ここでも同じ OR 条件でカウントする。
-      // parentTasks（is_hidden=false の購読）から親 type をマップに保存し、
-      // subscribeAllSubTasks のたびに再計算する。アーカイブ済（is_hidden=true）の
-      // 親はそもそも今日の業務対象ではないため、ここでは見ない。
+      // 日報メニューの件数バッジ。is_in_report=true + 「会議集の子タスクで開始日が今日」を
+      // ベース集合とし、そこから **リマインド対象（異常 task）を除外** する。
+      // DailyReport の stats と同じ意味合い：「報告対象の件数」を表す。
       // 「今日」の判定は北京時間（UTC+8）固定。端末タイムゾーンに依存しない。
       const today = todayBeijing();
       const parentTypeMap = new Map<string, string | undefined>();
       let lastSubs: any[] = [];
       const recompute = () => {
         const count = lastSubs.filter((t: any) => {
-          if (t.is_in_report) return true;
-          return parentTypeMap.get(t.parent_task_id) === 'meeting' && t.start_date === today;
+          // ベース集合：is_in_report=true OR 今日開始の会議
+          const inBase =
+            t.is_in_report ||
+            (parentTypeMap.get(t.parent_task_id) === 'meeting' && t.start_date === today);
+          if (!inBase) return false;
+          // 異常 task は カウントから除外（リマインド扱い、別途修正対象）
+          if (findAnomalies(t, today).length > 0) return false;
+          return true;
         }).length;
         setReportCount(count);
       };
@@ -115,8 +125,11 @@ export default function App() {
         setParentTasks(list);
         recompute();
       });
+      // 履歴行きプロジェクトの購読（日報履歴からのジャンプ先解決にだけ使う）。
+      const unsubscribeHidden = taskService.subscribeParentTasks(setHiddenParentTasks, true);
       const unsubscribeReportCount = taskService.subscribeAllSubTasks((subs) => {
         lastSubs = subs;
+        setAllSubTasks(subs);  // 子コンポーネントに props で配るため state に保持
         recompute();
       });
       const unsubscribeSettings = taskService.subscribeSettings((s) => {
@@ -141,12 +154,15 @@ export default function App() {
 
       return () => {
         unsubscribeTasks();
+        unsubscribeHidden();
         unsubscribeReportCount();
         unsubscribeSettings();
       };
     } else {
       // Clear data when no user
       setParentTasks([]);
+      setHiddenParentTasks([]);
+      setAllSubTasks([]);
       setReportCount(0);
       setSettings(null);
       setSelectedParentTask(null);
@@ -311,6 +327,19 @@ export default function App() {
     }
   };
 
+  // タスク → 親案件画面ジャンプの共通ハンドラ。
+  // 表示中 → 履歴行き の順で親を解決。完全削除されている場合は何もしない。
+  // Dashboard 検索結果 / DailyReport のリンクから共用される。
+  const jumpToTask = (task: { id: string; parent_task_id: string }) => {
+    const parent =
+      parentTasks.find(p => p.id === task.parent_task_id) ||
+      hiddenParentTasks.find(p => p.id === task.parent_task_id);
+    if (parent) {
+      setSelectedParentTask(parent);
+      setHighlightTaskId(task.id);
+    }
+  };
+
   const renderContent = () => {
     if (selectedParentTask) {
       return (
@@ -327,7 +356,15 @@ export default function App() {
 
     switch (activeTab) {
       case 'dashboard':
-        return <Dashboard parentTasks={parentTasks} onSelectTask={setSelectedParentTask} settings={settings} />;
+        return (
+          <Dashboard
+            parentTasks={parentTasks}
+            allSubTasks={allSubTasks}
+            onSelectTask={setSelectedParentTask}
+            onJumpToTask={jumpToTask}
+            settings={settings}
+          />
+        );
       case 'templates':
         return <TemplateManagement />;
       case 'history':
@@ -337,13 +374,10 @@ export default function App() {
       case 'reports':
         return (
           <DailyReport
-            onJumpToTask={(task) => {
-              const parent = parentTasks.find(p => p.id === task.parent_task_id);
-              if (parent) {
-                setSelectedParentTask(parent);
-                setHighlightTaskId(task.id);
-              }
-            }}
+            allSubTasks={allSubTasks}
+            visibleParents={parentTasks}
+            hiddenParents={hiddenParentTasks}
+            onJumpToTask={jumpToTask}
           />
         );
       case 'settings':
@@ -356,7 +390,15 @@ export default function App() {
           </div>
         );
       default:
-        return <Dashboard parentTasks={parentTasks} onSelectTask={setSelectedParentTask} settings={settings} />;
+        return (
+          <Dashboard
+            parentTasks={parentTasks}
+            allSubTasks={allSubTasks}
+            onSelectTask={setSelectedParentTask}
+            onJumpToTask={jumpToTask}
+            settings={settings}
+          />
+        );
     }
   };
 
