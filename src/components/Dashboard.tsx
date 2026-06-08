@@ -641,9 +641,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, allSubTasks, 
   }, [filter, nearTasksByFilter]);
 
   // タブごとに「表示する案件」を決める。
-  //  - すべて                   : 全件
-  //  - 期限間近 / 開始間近     : 該当タスクを持つ親案件（カウントとの一貫性のため）
-  //  - その他（遅延 / 着手遅れ / 進行中 / 完了）: 案件ステータスでフィルタ（既存挙動）
+  //  - すべて                            : 全件
+  //  - 期限間近 / 開始間近 / 遅延 / 着手遅れ / 進行中 / 完了
+  //      : 「該当状態の子タスクを持つ案件」を表示する。
+  //        バッジ件数は子タスク基準で数えているため、案件集約ステータスで絞ると
+  //        「子は該当するが案件の集約状態は別」のとき、バッジに数字が出るのに一覧が
+  //        空になる不整合が起きる（例: 進行中の子を1件持つが案件全体は未着手）。
+  //        子タスク基準で「持っている案件」を出すことで口径を揃える。
   const displayedTasks = useMemo(() => {
     if (filter === 'all') return parentTasks;
     if (filter === 'final_deadline_near' || filter === 'start_near') {
@@ -653,8 +657,18 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, allSubTasks, 
       const parentIds = new Set(source.map(t => t.parent_task_id));
       return parentTasks.filter(p => parentIds.has(p.id));
     }
-    return tasksWithStats.filter(t => t.stats.status === filter).map(t => t.task);
-  }, [filter, parentTasks, tasksWithStats, nearTasksByFilter]);
+    // 状態タブ：該当状態の子タスク（定例テンプレートは除外）を持つ案件
+    const statusMatch = (t: SubTask): boolean =>
+      filter === 'delayed' ? (t.status === '遅れ' || t.status === '期限遅れ') :
+      filter === 'start_delayed' ? t.status === '着手遅れ' :
+      filter === 'in_progress' ? t.status === '進行中' :
+      filter === 'completed' ? t.status === '済' :
+      false;
+    const parentIds = new Set(
+      allSubTasks.filter(t => !t.recurrence && statusMatch(t)).map(t => t.parent_task_id),
+    );
+    return parentTasks.filter(p => parentIds.has(p.id));
+  }, [filter, parentTasks, allSubTasks, nearTasksByFilter]);
 
   // 子タスク行に出す「期限間近 / 開始間近」用の左ボーダー色クラス。
   // 既存の「遅延 = 赤」と被らないよう、タブ色（orange / cyan）に合わせる。
@@ -1070,8 +1084,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, allSubTasks, 
               跨週タスクは両週にカウントされる。優先度 A/B/C は 高/中/低 表示。 */}
           <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 px-4 sm:px-5 py-2 border-b border-black/5 text-[11px] bg-white/50">
             {([
+              { label: '先週', cnt: weekPriorityStats.prev },
               { label: '本週', cnt: weekPriorityStats.current },
-              { label: '来週', cnt: weekPriorityStats.next },
             ] as const).map(({ label, cnt }) => (
               <div key={label} className="flex items-center gap-2">
                 <span className="font-bold text-[#1d1d1f]">{label}</span>
