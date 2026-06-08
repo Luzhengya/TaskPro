@@ -15,6 +15,7 @@ import {
   Pencil,
   Wand2,
   X,
+  Repeat,
 } from 'lucide-react';
 import {
   ANOMALY_LABEL,
@@ -34,6 +35,7 @@ import {
   buildDisplayData,
   extractDailyReportCandidates,
 } from '../dailyReportSelector';
+import { matchesRecurrence } from '../recurrence';
 import { ChevronDown } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { clsx, type ClassValue } from 'clsx';
@@ -231,6 +233,8 @@ export const DailyReport: React.FC<DailyReportProps> = ({
     catch { return null; }
   });
   const restoredScrollRef = useRef(false);
+  // 定例作業の実体自動生成の二重実行ガード（処理中シグネチャを保持）。
+  const materializeRanRef = useRef<string>('');
 
   // カテゴリセクションの折叠状態。既定: 全て折叠（ユーザー要件）。
   // 中身（プロジェクト見出し）の既定: 展開（折叠状態を Set で管理し、要素が入っていれば折叠扱い）。
@@ -318,6 +322,70 @@ export const DailyReport: React.FC<DailyReportProps> = ({
     return map;
   }, [parentTasks]);
 
+  // 定例作業の自動実体化（lazy materialization）。
+  //   - **今日分のみ** 実体タスクを生成する。明日分は実体化せず、表示上の文言予告のみ
+  //     （後述の tomorrowRecurring）。これにより「未来の実体」が DB に溜まらず、
+  //     二重生成のリスクも無い（毎日その日が来た時だけ生成）。
+  //   - 履歴日表示中は生成しない（過去を遡って作らない）。
+  //   - allSubTasks は親集約で更新されるため、生成 → 反映 → 再評価で収束する。
+  //     同一バッチの二重生成を防ぐため materializeRanRef でシグネチャ管理。
+  useEffect(() => {
+    if (isHistoryMode) return;
+    const templates = allSubTasks.filter(
+      t => t.recurrence && visibleParentMap.has(t.parent_task_id),
+    );
+    const due = templates.filter(t => matchesRecurrence(t.recurrence!, today));
+    const missing = due.filter(
+      tmpl => !allSubTasks.some(
+        t => t.recurrence_source_id === tmpl.id && t.start_date === today,
+      ),
+    );
+    if (missing.length === 0) return;
+
+    const sig = today + '|' + missing.map(t => t.id).sort().join(',');
+    if (materializeRanRef.current === sig) return;
+    materializeRanRef.current = sig;
+
+    (async () => {
+      for (const tmpl of missing) {
+        try {
+          await taskService.addSubTask({
+            parent_task_id: tmpl.parent_task_id,
+            system: tmpl.system || '',
+            month: '',
+            daily_report_date: today,
+            start_date: today,
+            due_date: today,
+            final_deadline: today,
+            status: '未着手',
+            task_name: tmpl.task_name,
+            planned_hours: tmpl.planned_hours,
+            // actual_hours は未設定（テンプレからは引き継がない）
+            priority: tmpl.priority,
+            remarks: tmpl.remarks || '',
+            recurrence_source_id: tmpl.id,
+            week_number: 0,
+            flag: 0,
+          });
+        } catch (err) {
+          console.error('Failed to materialize recurring task:', err);
+        }
+      }
+    })();
+  }, [allSubTasks, today, isHistoryMode, visibleParentMap]);
+
+  // 明日（1 営業日先）にルール該当する定例テンプレートの一覧（実体化しない予告用）。
+  // 確定後ビューの「定例作業」セクション末尾に「明日、着手する予定です」と文言表示する。
+  const tomorrowRecurring = useMemo(() => {
+    if (isHistoryMode) return [] as SubTask[];
+    const tomorrow = addBusinessDays(today, 1);
+    return allSubTasks.filter(
+      t => t.recurrence
+        && visibleParentMap.has(t.parent_task_id)
+        && matchesRecurrence(t.recurrence, tomorrow),
+    );
+  }, [allSubTasks, today, isHistoryMode, visibleParentMap]);
+
   // Source of truth for displayed tasks:
   //   - History mode: use the saved snapshot's tasks_snapshot
   //   - Today mode: live tasks where
@@ -331,6 +399,7 @@ export const DailyReport: React.FC<DailyReportProps> = ({
         return snapshot?.tasks_snapshot || [];
       }
       return allSubTasks.filter(t => {
+        if (t.recurrence) return false; // 定例テンプレートは日報に出さない（実体だけ出す）
         if (t.is_in_report) return true;
         const parent = parentMap.get(t.parent_task_id);
         return parent?.type === 'meeting' && t.start_date === today;
@@ -1366,7 +1435,11 @@ export const DailyReport: React.FC<DailyReportProps> = ({
         // 確定後ビュー（新 7 セクション）
         <div className="space-y-3">
           {CONFIRMED_CATEGORY_ORDER.map(cat => {
-            const count = confirmedView.counts[cat];
+            const isRecurring = cat === 'recurring';
+            // 「定例作業」セクションは今日実体 + 明日予告（文言のみ）を合算して件数表示。
+            const tomorrowCount = isRecurring ? tomorrowRecurring.length : 0;
+            const todayCount = confirmedView.counts[cat];
+            const count = todayCount + tomorrowCount;
             const isOpen = !collapsedConfirmedSections.has(cat);
             const isDisabled = count === 0;
             const ids = sortedConfirmedParentIdsByCategory[cat];
@@ -1410,6 +1483,19 @@ export const DailyReport: React.FC<DailyReportProps> = ({
                       const tasks = confirmedView.byCategory[cat].get(pid) || [];
                       return renderProjectCard(parent, tasks, `confirmed::${cat}::${pid}`);
                     })}
+                    {/* 定例作業セクション末尾：明日の定例予告（実体化しない文言） */}
+                    {isRecurring && tomorrowRecurring.length > 0 && (
+                      <div className="px-4 lg:px-5 py-3 bg-white space-y-1">
+                        {tomorrowRecurring.map(t => (
+                          <div key={t.id} className="flex items-center gap-2 text-xs lg:text-sm text-[#86868b]">
+                            <Repeat size={13} className="text-purple-400 flex-shrink-0" />
+                            <span>
+                              定例作業 <span className="font-medium text-[#1d1d1f]">{t.task_name}</span>　明日、着手する予定です。
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

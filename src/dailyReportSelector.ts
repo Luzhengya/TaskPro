@@ -108,6 +108,9 @@ export const ANOMALY_LABEL: Record<AnomalyCode, string> = {
 export function findAnomalies(t: SubTask, today: string): AnomalyCode[] {
   const codes: AnomalyCode[] = [];
 
+  // 定例作業のテンプレート行は日付・状態を持たないため異常判定の対象外。
+  if (t.recurrence) return codes;
+
   // 数値判定ヘルパ。**0 は正当値**として扱う（ユーザー要件）。
   // 役割分担：未入力（undefined/null）は A/B で拾い、負の数は G「工数異常」で拾う。
   const isMissing = (n: number | undefined | null) => n == null;
@@ -191,6 +194,8 @@ const ACTIVE_STATUSES: SubTaskStatus[] = ['進行中', '未着手'];
 
 /** 6 カテゴリのどれに該当するか（該当無しは null）。is_in_report・異常チェックは行わない。 */
 function classify(t: SubTask, today: string, startNearHorizon: string): ExtractCategory | null {
+  // 定例テンプレートは抽出対象外（実体は別途生成される）。
+  if (t.recurrence) return null;
   if (t.status === '期限遅れ') return 'overdue_final';
   if (t.status === '遅れ') return 'overdue';
   if (t.status === '着手遅れ') return 'overdue_start';
@@ -364,14 +369,15 @@ export function buildDisplayData(
  * 確定後ビュー（編集モード抜けた後の日報表示）
  * ============================================================ */
 
-/** 確定後ビューのカテゴリ（6 種類、ステータスベース）。 */
+/** 確定後ビューのカテゴリ（ステータスベース + 定例作業）。 */
 export type ConfirmedCategory =
   | 'overdue_final'    // 期限遅れあり
   | 'overdue'          // 遅延あり
   | 'overdue_start'    // 着手遅れあり
   | 'in_progress'      // 進行中
   | 'completed_today'  // 完了（編集中に済に変更された task）
-  | 'starting_planned'; // 着手予定（明日予定 = 未着手 + start_date が 1 営業日先まで）
+  | 'starting_planned' // 着手予定（明日予定 = 未着手 + start_date が 1 営業日先まで）
+  | 'recurring';       // 定例作業（テンプレートから生成された実体）
 
 export const CONFIRMED_CATEGORY_LABEL: Record<ConfirmedCategory, string> = {
   overdue_final:     '期限遅れあり',
@@ -380,6 +386,7 @@ export const CONFIRMED_CATEGORY_LABEL: Record<ConfirmedCategory, string> = {
   in_progress:       '進行中',
   completed_today:   '完了',
   starting_planned:  '着手予定',
+  recurring:         '定例作業',
 };
 
 export const CONFIRMED_CATEGORY_ORDER: ConfirmedCategory[] = [
@@ -389,6 +396,7 @@ export const CONFIRMED_CATEGORY_ORDER: ConfirmedCategory[] = [
   'in_progress',
   'completed_today',
   'starting_planned',
+  'recurring',
 ];
 
 export interface ConfirmedDisplay {
@@ -421,6 +429,7 @@ export function buildConfirmedDisplayData(
     in_progress:      new Map(),
     completed_today:  new Map(),
     starting_planned: new Map(),
+    recurring:        new Map(),
   };
 
   const push = (cat: ConfirmedCategory, t: SubTask) => {
@@ -430,6 +439,9 @@ export function buildConfirmedDisplayData(
   };
 
   for (const t of reportTasks) {
+    if (t.recurrence) continue; // 定例テンプレートは表示対象外（防御）
+    // 定例作業の実体は専用カテゴリへ（状態を問わず一括表示）。
+    if (t.recurrence_source_id) { push('recurring', t); continue; }
     // ステータス別（互斥）
     if (t.status === '期限遅れ') push('overdue_final', t);
     else if (t.status === '遅れ') push('overdue', t);
@@ -515,6 +527,7 @@ export function buildDailyReportSummary(
   const startingPlanned: SubTask[] = [];
 
   for (const t of reportTasks) {
+    if (t.recurrence) continue; // 定例テンプレートはサマリー対象外（防御）
     if (t.status === '期限遅れ') overdueFinal.push(t);
     else if (t.status === '遅れ') overdue.push(t);
     else if (t.status === '着手遅れ') overdueStart.push(t);

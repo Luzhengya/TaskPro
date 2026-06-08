@@ -10,6 +10,19 @@ export type Priority = 'A' | 'B' | 'C';
  * （CloudBase 既存ドキュメント／Excel インポート由来のレコードはこのフィールドを持たない） */
 export type ParentTaskType = 'normal' | 'meeting';
 
+/**
+ * 定例作業の繰り返しルール。
+ *  - daily   : 毎日
+ *  - weekly  : 毎週、指定曜日（weekdays: 0=日, 1=月, ..., 6=土）
+ *  - monthly : 毎月、指定日（days: 1〜31）
+ * このルールを持つ SubTask は「テンプレート」扱いとなり、日報には直接出ず、
+ * 日報を開いた日に該当すれば「実体タスク」が自動生成される。
+ */
+export type RecurrenceRule =
+  | { kind: 'daily' }
+  | { kind: 'weekly'; weekdays: number[] }
+  | { kind: 'monthly'; days: number[] };
+
 export interface ParentTask {
   id: string;
   name: string;
@@ -54,6 +67,11 @@ export interface SubTask {
   /** このタスクの期日・期限をシフトさせた遅延の発生元ステータス（表示色の決定に使う）。 */
   delay_shift_status?: SubTaskStatus;
   is_in_report?: boolean;
+  /** 定例作業のテンプレート行。値があれば日報には出ず、該当日に実体を自動生成する。 */
+  recurrence?: RecurrenceRule;
+  /** 自動生成された実体タスクの場合、生成元テンプレートの SubTask id。
+   *  同一テンプレ × 同一日で二重生成しないための紐付け。 */
+  recurrence_source_id?: string;
   order?: number;
   weekday?: string;
   week?: string;

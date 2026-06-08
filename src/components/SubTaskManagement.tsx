@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { ParentTask, SubTask, SubTaskStatus, Priority } from '../types';
+import { ParentTask, SubTask, SubTaskStatus, Priority, RecurrenceRule } from '../types';
 import { taskService } from '../services/taskService';
 import { EditableCell } from './EditableCell';
+import { formatRecurrence, WEEKDAY_LABELS } from '../recurrence';
 import {
   Plus,
   Lock,
@@ -11,7 +12,9 @@ import {
   ChevronLeft,
   GripVertical,
   CheckSquare,
-  Square
+  Square,
+  Repeat,
+  Pencil
 } from 'lucide-react';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import { clsx, type ClassValue } from 'clsx';
@@ -48,6 +51,20 @@ export const SubTaskManagement: React.FC<SubTaskManagementProps> = ({ parentTask
   const [iconModalTask, setIconModalTask] = useState<SubTask | null>(null);
   const [iconInput, setIconInput] = useState('');
   const [updateError, setUpdateError] = useState<string | null>(null);
+
+  // 定例テンプレート編集モーダルの状態。id=null は新規作成。
+  interface TemplateDraft {
+    id: string | null;
+    task_name: string;
+    system: string;
+    ruleKind: 'daily' | 'weekly' | 'monthly';
+    weekdays: number[];   // weekly のとき（0=日〜6=土）
+    monthlyDays: number[]; // monthly のとき（1〜31）
+    planned_hours: number;
+    priority: Priority;
+  }
+  const [templateDraft, setTemplateDraft] = useState<TemplateDraft | null>(null);
+  const [isSavingTemplate, setIsSavingTemplate] = useState(false);
 
   // Storage keys for persisting table preferences
   const STORAGE_KEY_FROZEN = 'subtask-frozen-columns';
@@ -130,6 +147,13 @@ export const SubTaskManagement: React.FC<SubTaskManagementProps> = ({ parentTask
   // 親が会議集かどうか。会議集は親側の期日を持たないため、整合性チェック・
   // 遅延シフト時の親期日延長などをスキップする目的で各所から参照する。
   const isMeetingParent = parentTask.type === 'meeting';
+
+  // 定例テンプレート（recurrence あり）と通常の実体タスクを分離。
+  //   - テンプレートは上部の「定例テンプレート」カード領域で管理（表に出さない）
+  //   - 実体タスク（自動生成された定例の当日分 + 単発タスク）は従来の表で管理
+  // normal 親では templates が常に空なので entities === subTasks となり挙動不変。
+  const templates = subTasks.filter(t => t.recurrence);
+  const entities = subTasks.filter(t => !t.recurrence);
 
   const handleAddRow = async () => {
     const newTaskId = await taskService.addSubTask({
@@ -319,12 +343,13 @@ export const SubTaskManagement: React.FC<SubTaskManagementProps> = ({ parentTask
 
   const onDragEnd = async (result: DropResult) => {
     if (!result.destination) return;
-    
-    const items = Array.from(subTasks);
+
+    // 表に出ているのは entities（実体タスク）のみ。entities を並べ替えて order を振り直す。
+    const items = Array.from(entities);
     const [reorderedItem] = items.splice(result.source.index, 1);
     items.splice(result.destination.index, 0, reorderedItem);
-    
-    const updatePromises = items.map((item, index) => 
+
+    const updatePromises = items.map((item, index) =>
       taskService.updateSubTask(item.id, { order: index })
     );
     await Promise.all(updatePromises);
@@ -337,6 +362,113 @@ export const SubTaskManagement: React.FC<SubTaskManagementProps> = ({ parentTask
     taskService.deleteSubTask(targetId).catch(err => {
       console.error('Failed to delete sub-task:', err);
     });
+  };
+
+  /* ===== 定例テンプレート ===== */
+
+  // 新規テンプレ作成モーダルを開く。
+  const openNewTemplate = () => {
+    setTemplateDraft({
+      id: null,
+      task_name: '',
+      system: '',
+      ruleKind: 'daily',
+      weekdays: [1, 2, 3, 4, 5], // 既定：平日
+      monthlyDays: [1],
+      planned_hours: 0,
+      priority: 'B',
+    });
+  };
+
+  // 既存テンプレを編集モーダルへロード。
+  const openEditTemplate = (t: SubTask) => {
+    const r = t.recurrence!;
+    setTemplateDraft({
+      id: t.id,
+      task_name: t.task_name,
+      system: t.system || '',
+      ruleKind: r.kind,
+      weekdays: r.kind === 'weekly' ? [...r.weekdays] : [1, 2, 3, 4, 5],
+      monthlyDays: r.kind === 'monthly' ? [...r.days] : [1],
+      planned_hours: t.planned_hours,
+      priority: t.priority,
+    });
+  };
+
+  const handleSaveTemplate = async () => {
+    const d = templateDraft;
+    if (!d || !d.task_name.trim()) return;
+    // weekly/monthly で選択ゼロ件は不正なので保存させない。
+    if (d.ruleKind === 'weekly' && d.weekdays.length === 0) {
+      setUpdateError('毎週の曜日を 1 つ以上選択してください。');
+      return;
+    }
+    if (d.ruleKind === 'monthly' && d.monthlyDays.length === 0) {
+      setUpdateError('毎月の日付を 1 つ以上選択してください。');
+      return;
+    }
+    const recurrence: RecurrenceRule =
+      d.ruleKind === 'daily' ? { kind: 'daily' } :
+      d.ruleKind === 'weekly' ? { kind: 'weekly', weekdays: [...d.weekdays].sort((a, b) => a - b) } :
+      { kind: 'monthly', days: [...d.monthlyDays].sort((a, b) => a - b) };
+
+    setIsSavingTemplate(true);
+    try {
+      if (d.id) {
+        await taskService.updateSubTask(d.id, {
+          task_name: d.task_name.trim(),
+          system: d.system,
+          planned_hours: d.planned_hours,
+          priority: d.priority,
+          recurrence,
+        });
+      } else {
+        await taskService.addSubTask({
+          parent_task_id: parentTask.id,
+          system: d.system,
+          month: '',
+          daily_report_date: '',
+          start_date: '',
+          due_date: '',
+          final_deadline: '',
+          status: '未着手',
+          task_name: d.task_name.trim(),
+          planned_hours: d.planned_hours,
+          priority: d.priority,
+          remarks: '',
+          recurrence,
+          week_number: 0,
+          flag: 0,
+        });
+      }
+      setTemplateDraft(null);
+    } catch (err) {
+      console.error('Failed to save template:', err);
+      setUpdateError('テンプレートの保存に失敗しました。');
+    } finally {
+      setIsSavingTemplate(false);
+    }
+  };
+
+  // テンプレ削除（確認なしで即削除。実体は残る）。
+  const handleDeleteTemplate = (id: string) => {
+    taskService.deleteSubTask(id).catch(err => {
+      console.error('Failed to delete template:', err);
+    });
+  };
+
+  // ドラフトのルール種別を変更（チップ切替）。
+  const toggleDraftWeekday = (w: number) => {
+    setTemplateDraft(d => d && ({
+      ...d,
+      weekdays: d.weekdays.includes(w) ? d.weekdays.filter(x => x !== w) : [...d.weekdays, w],
+    }));
+  };
+  const toggleDraftMonthDay = (day: number) => {
+    setTemplateDraft(d => d && ({
+      ...d,
+      monthlyDays: d.monthlyDays.includes(day) ? d.monthlyDays.filter(x => x !== day) : [...d.monthlyDays, day],
+    }));
   };
 
   const getFrozenLeft = (index: number) => {
@@ -463,7 +595,7 @@ export const SubTaskManagement: React.FC<SubTaskManagementProps> = ({ parentTask
               )}
             </h2>
             <p className="text-[#86868b] text-xs lg:text-sm">
-              {isMeetingParent ? '定例作業（親の期日なし）' : `最終期日: ${parentTask.deadline}`}
+              {isMeetingParent ? '繰り返しのタスク管理' : `最終期日: ${parentTask.deadline}`}
               {hasDateAnomaly && (
                 <span className="ml-2 text-red-600 font-bold inline-flex items-center gap-1 align-middle">
                   <AlertCircle size={14} />
@@ -476,6 +608,16 @@ export const SubTaskManagement: React.FC<SubTaskManagementProps> = ({ parentTask
         </div>
 
         <div className="flex items-center gap-3 pl-11 lg:pl-0">
+          {isMeetingParent && (
+            <button
+              onClick={openNewTemplate}
+              className="mac-button mac-button-secondary flex items-center gap-2"
+              title="毎日・毎週・毎月の定例作業を登録"
+            >
+              <Repeat size={18} />
+              <span>定例テンプレート追加</span>
+            </button>
+          )}
           <button
             onClick={handleAddRow}
             className="mac-button mac-button-secondary flex items-center gap-2"
@@ -496,6 +638,53 @@ export const SubTaskManagement: React.FC<SubTaskManagementProps> = ({ parentTask
           >
             ✕
           </button>
+        </div>
+      )}
+
+      {/* 定例テンプレート領域（会議集のみ）。実体タスク表とは別管理。 */}
+      {isMeetingParent && templates.length > 0 && (
+        <div className="mac-card p-4 lg:p-5">
+          <div className="flex items-center gap-2 mb-3">
+            <Repeat size={16} className="text-purple-600" />
+            <h3 className="text-sm font-bold text-[#1d1d1f]">定例テンプレート</h3>
+            <span className="text-[10px] text-[#86868b]">
+              該当日に当日分のタスクが自動生成されます
+            </span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {templates.map(t => (
+              <div
+                key={t.id}
+                className="flex items-center gap-2 p-2.5 bg-purple-50/40 border border-purple-100 rounded-xl"
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-bold text-[#1d1d1f] truncate">{t.task_name}</span>
+                    <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-purple-100 text-purple-700 flex-shrink-0">
+                      {t.recurrence ? formatRecurrence(t.recurrence) : ''}
+                    </span>
+                  </div>
+                  <div className="text-[10px] text-[#86868b] mt-0.5">
+                    {t.system ? `${t.system} · ` : ''}予定 {t.planned_hours}h · 優先度 {t.priority}
+                  </div>
+                </div>
+                <button
+                  onClick={() => openEditTemplate(t)}
+                  className="p-1.5 text-[#86868b] hover:text-[#007aff] hover:bg-blue-50 rounded-lg transition-colors flex-shrink-0"
+                  title="編集"
+                >
+                  <Pencil size={14} />
+                </button>
+                <button
+                  onClick={() => handleDeleteTemplate(t.id)}
+                  className="p-1.5 text-gray-300 hover:text-red-500 transition-colors flex-shrink-0"
+                  title="削除"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -532,7 +721,7 @@ export const SubTaskManagement: React.FC<SubTaskManagementProps> = ({ parentTask
                     ref={provided.innerRef}
                     className="divide-y divide-gray-50"
                   >
-                    {subTasks.map((task, index) => {
+                    {entities.map((task, index) => {
                       const isCompleted = task.status === '済';
                       const isHighlighted = highlightTaskId === task.id;
                       const LAST_COL = 12;
@@ -802,9 +991,13 @@ export const SubTaskManagement: React.FC<SubTaskManagementProps> = ({ parentTask
         </DragDropContext>
       </div>
       
-      {subTasks.length === 0 && (
+      {entities.length === 0 && (
         <div className="py-20 text-center">
-          <p className="text-[#86868b] italic text-sm">タスクが見つかりません。Excelからインポートするか、手動で追加してください。</p>
+          <p className="text-[#86868b] italic text-sm">
+            {isMeetingParent
+              ? '実体タスクはありません。定例テンプレートを登録すると該当日に自動生成されます。'
+              : 'タスクが見つかりません。Excelからインポートするか、手動で追加してください。'}
+          </p>
         </div>
       )}
     </div>
@@ -817,6 +1010,161 @@ export const SubTaskManagement: React.FC<SubTaskManagementProps> = ({ parentTask
           onCancel={handleDelayCancel}
           onSubmit={handleDelaySubmit}
         />
+      )}
+
+      {/* 定例テンプレート 編集モーダル */}
+      {templateDraft && (
+        <div
+          className="fixed inset-0 bg-black/30 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => setTemplateDraft(null)}
+        >
+          <div
+            className="mac-card max-w-md w-full max-h-[90vh] flex flex-col shadow-2xl animate-in zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-2 p-5 border-b border-black/5">
+              <div className="p-1.5 bg-purple-50 text-purple-600 rounded-lg">
+                <Repeat size={18} />
+              </div>
+              <h3 className="text-base font-bold text-[#1d1d1f]">
+                {templateDraft.id ? '定例テンプレートを編集' : '定例テンプレートを追加'}
+              </h3>
+            </div>
+            <div className="flex-1 overflow-auto p-5 space-y-4">
+              {/* タスク名 */}
+              <div>
+                <label className="block text-xs font-bold text-[#1d1d1f] mb-2">作業名</label>
+                <input
+                  type="text"
+                  value={templateDraft.task_name}
+                  onChange={(e) => setTemplateDraft(d => d && ({ ...d, task_name: e.target.value }))}
+                  placeholder="例: 朝会、日報作成"
+                  className="mac-input w-full text-sm"
+                  autoFocus
+                />
+              </div>
+              {/* システム */}
+              <div>
+                <label className="block text-xs font-bold text-[#1d1d1f] mb-2">システム（任意）</label>
+                <input
+                  type="text"
+                  value={templateDraft.system}
+                  onChange={(e) => setTemplateDraft(d => d && ({ ...d, system: e.target.value }))}
+                  className="mac-input w-full text-sm"
+                />
+              </div>
+              {/* 繰り返しルール */}
+              <div>
+                <label className="block text-xs font-bold text-[#1d1d1f] mb-2">繰り返し</label>
+                <div className="flex gap-2 mb-3">
+                  {([
+                    { k: 'daily', label: '毎日' },
+                    { k: 'weekly', label: '毎週' },
+                    { k: 'monthly', label: '毎月' },
+                  ] as { k: 'daily' | 'weekly' | 'monthly'; label: string }[]).map(({ k, label }) => (
+                    <button
+                      key={k}
+                      type="button"
+                      onClick={() => setTemplateDraft(d => d && ({ ...d, ruleKind: k }))}
+                      className={cn(
+                        'flex-1 py-2 rounded-lg text-sm font-bold transition-colors border',
+                        templateDraft.ruleKind === k
+                          ? 'border-[#007aff] bg-[#007aff]/10 text-[#007aff]'
+                          : 'border-gray-200 text-[#86868b] hover:border-gray-300',
+                      )}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* 毎週：曜日選択 */}
+                {templateDraft.ruleKind === 'weekly' && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {WEEKDAY_LABELS.map((label, w) => (
+                      <button
+                        key={w}
+                        type="button"
+                        onClick={() => toggleDraftWeekday(w)}
+                        className={cn(
+                          'w-9 h-9 rounded-lg text-sm font-bold transition-colors border',
+                          templateDraft.weekdays.includes(w)
+                            ? 'border-[#007aff] bg-[#007aff]/10 text-[#007aff]'
+                            : 'border-gray-200 text-[#86868b] hover:border-gray-300',
+                        )}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* 毎月：日付選択 */}
+                {templateDraft.ruleKind === 'monthly' && (
+                  <div className="grid grid-cols-7 gap-1">
+                    {Array.from({ length: 31 }, (_, i) => i + 1).map(day => (
+                      <button
+                        key={day}
+                        type="button"
+                        onClick={() => toggleDraftMonthDay(day)}
+                        className={cn(
+                          'h-8 rounded-md text-xs font-bold transition-colors border',
+                          templateDraft.monthlyDays.includes(day)
+                            ? 'border-[#007aff] bg-[#007aff]/10 text-[#007aff]'
+                            : 'border-gray-200 text-[#86868b] hover:border-gray-300',
+                        )}
+                      >
+                        {day}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              {/* 予定工数 + 優先度 */}
+              <div className="flex gap-3">
+                <div className="flex-1">
+                  <label className="block text-xs font-bold text-[#1d1d1f] mb-2">予定工数 (h)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={0.5}
+                    value={templateDraft.planned_hours}
+                    onChange={(e) => setTemplateDraft(d => d && ({ ...d, planned_hours: parseFloat(e.target.value) || 0 }))}
+                    className="mac-input w-full text-sm"
+                  />
+                </div>
+                <div className="flex-1">
+                  <label className="block text-xs font-bold text-[#1d1d1f] mb-2">優先度</label>
+                  <select
+                    value={templateDraft.priority}
+                    onChange={(e) => setTemplateDraft(d => d && ({ ...d, priority: e.target.value as Priority }))}
+                    className="mac-input w-full text-sm"
+                  >
+                    <option value="A">A</option>
+                    <option value="B">B</option>
+                    <option value="C">C</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+            <div className="flex gap-2 p-5 border-t border-black/5">
+              <button
+                onClick={handleSaveTemplate}
+                disabled={isSavingTemplate || !templateDraft.task_name.trim()}
+                className="flex-1 py-2.5 bg-[#007aff] text-white rounded-xl font-bold hover:bg-[#0062cc] transition-colors disabled:opacity-50"
+              >
+                {isSavingTemplate ? '保存中...' : '保存'}
+              </button>
+              <button
+                onClick={() => setTemplateDraft(null)}
+                disabled={isSavingTemplate}
+                className="flex-1 py-2.5 bg-gray-100 text-[#1d1d1f] rounded-xl font-bold hover:bg-gray-200 transition-colors disabled:opacity-50"
+              >
+                キャンセル
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {deleteId && (
