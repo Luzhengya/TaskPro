@@ -177,13 +177,13 @@ export const Settings: React.FC = () => {
           </div>
           
           <div className="space-y-6">
-            {/* 「期限間近」「開始間近」タブの判定しきい値（営業日）。 */}
+            {/* 「期日間近」「開始間近」タブの判定しきい値（営業日）。 */}
             <div>
               <label className="block text-xs font-bold text-[#1d1d1f] mb-1">
-                「期限間近・開始間近」タブの判定（営業日）
+                「期日間近・開始間近」タブの判定（営業日）
               </label>
               <p className="text-[10px] text-[#86868b] mb-3">
-                今日からこの営業日数以内に「期限」または「開始日」が来るタスクを持つ案件を「間近」扱いにします（土日スキップ）。
+                今日からこの営業日数以内に「期日」または「開始日」が来るタスクを持つ案件を「間近」扱いにします（土日スキップ）。
               </p>
               <div className="flex items-center gap-2">
                 <input

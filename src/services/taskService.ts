@@ -1147,6 +1147,35 @@ export const taskService = {
     }
   },
 
+  async getDailyReportDates(): Promise<string[]> {
+    if (this.isGuest) {
+      try {
+        const dates: string[] = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (!key?.startsWith('daily-report-')) continue;
+          const date = key.replace('daily-report-', '');
+          if (/^\d{4}-\d{2}-\d{2}$/.test(date)) dates.push(date);
+        }
+        return dates.sort();
+      } catch {
+        return [];
+      }
+    }
+    if (!auth.currentUser) return [];
+    const path = 'daily_reports';
+    try {
+      const docs = await getOwnedDocs(path);
+      return docs
+        .map((d: any) => d.date)
+        .filter((d: any): d is string => typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d))
+        .sort();
+    } catch (error) {
+      handleDbError(error, OperationType.GET, path, false);
+      return [];
+    }
+  },
+
   async deleteDailyReport(date: string) {
     if (this.isGuest) {
       try {

@@ -122,8 +122,8 @@ export interface UserSettings {
   /** ユーザー定義のクイックフィルタ。Dashboard 上部のチップとして並ぶ。
    *  未設定（undefined）の場合は初回起動時に DEFAULT_QUICK_FILTERS で seed する。 */
   quick_filters?: QuickFilter[];
-  /** 「期限間近」「開始間近」タブの判定に使う営業日数（土日を飛ばす）。
-   *  例: 1 → 今日〜「次の営業日」 までに期限/開始日が来る子タスクを持つ案件を該当扱い。
+  /** 「期日間近」「開始間近」タブの判定に使う営業日数（土日を飛ばす）。
+   *  例: 1 → 今日〜「次の営業日」 までに期日/開始日が来る子タスクを持つ案件を該当扱い。
    *  未設定なら既定 1。 */
   near_threshold_days?: number;
   created_at: string;

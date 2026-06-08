@@ -58,7 +58,7 @@ interface Props {
   /**
    * 表示モード。デフォルト 'search' は検索結果用（開始日列なし、予定/実績の合算表示）。
    * 'start_near' は「開始間近」タブ用 → 開始日を明示、実績は非表示（未着手前提）。
-   * 'final_deadline_near' は「期限間近」タブ用 → 開始日 + 予定 + 実績 を全部出す。
+   * 'final_deadline_near' は「期日間近」タブ用 → 開始日 + 予定 + 実績 を全部出す。
    */
   mode?: 'search' | 'start_near' | 'final_deadline_near';
   /** 空のときに表示する補助メッセージ。 */

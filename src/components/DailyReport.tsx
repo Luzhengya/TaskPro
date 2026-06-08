@@ -113,6 +113,28 @@ const fmtDate = (dateStr?: string) => {
 // Today as YYYY-MM-DD（北京時間 UTC+8 固定で算出。端末タイムゾーンに依存しない）。
 const todayStr = () => todayBeijing();
 
+const monthLabel = (month: string) => {
+  const [y, m] = month.split('-').map(Number);
+  return `${y}年${m}月`;
+};
+
+const shiftMonth = (month: string, delta: number) => {
+  const [y, m] = month.split('-').map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+};
+
+const buildCalendarDays = (month: string) => {
+  const [y, m] = month.split('-').map(Number);
+  const first = new Date(y, m - 1, 1);
+  const lastDay = new Date(y, m, 0).getDate();
+  const cells: (string | null)[] = Array(first.getDay()).fill(null);
+  for (let day = 1; day <= lastDay; day++) {
+    cells.push(`${y}-${String(m).padStart(2, '0')}-${String(day).padStart(2, '0')}`);
+  }
+  return cells;
+};
+
 export const DailyReport: React.FC<DailyReportProps> = ({
   allSubTasks,
   visibleParents,
@@ -130,6 +152,9 @@ export const DailyReport: React.FC<DailyReportProps> = ({
   const [selectedDate, setSelectedDate] = useState<string>(today);
   const [snapshot, setSnapshot] = useState<DailyReportSnapshot | null>(null);
   const [isLoadingSnapshot, setIsLoadingSnapshot] = useState(false);
+  const [savedReportDates, setSavedReportDates] = useState<Set<string>>(new Set());
+  const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
+  const [calendarMonth, setCalendarMonth] = useState<string>(() => today.slice(0, 7));
 
   // Editable state.
   // notes / summary は提出までは local state のみ。session 内で複数回ナビゲーションした時に
@@ -308,6 +333,19 @@ export const DailyReport: React.FC<DailyReportProps> = ({
     })();
     return () => { cancelled = true; };
   }, [selectedDate, today]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const dates = await taskService.getDailyReportDates();
+      if (!cancelled) setSavedReportDates(new Set(dates));
+    })();
+    return () => { cancelled = true; };
+  }, [snapshot]);
+
+  useEffect(() => {
+    setCalendarMonth(selectedDate.slice(0, 7));
+  }, [selectedDate]);
 
   // Map parent IDs → parent task objects (merged visible + hidden)
   // 表示用：履歴行きしたプロジェクト名も出したいので visible + hidden をマージ。
@@ -932,6 +970,7 @@ export const DailyReport: React.FC<DailyReportProps> = ({
       // Reload snapshot so the "再提出" button state reflects the save
       const reloaded = await taskService.getDailyReport(today);
       setSnapshot(reloaded);
+      setSavedReportDates(prev => new Set(prev).add(today));
       setSubmitFeedback(snapshot ? '日報を更新しました' : '日報を保存しました');
       setTimeout(() => setSubmitFeedback(null), 3000);
       // 提出完了 → 確定後ビュー用の編集 snapshot もクリア（完了判定が無効に戻る）。
@@ -997,6 +1036,11 @@ export const DailyReport: React.FC<DailyReportProps> = ({
       setNotes('');
       setSummary('');
       setSnapshot(null);
+      setSavedReportDates(prev => {
+        const next = new Set(prev);
+        next.delete(selectedDate);
+        return next;
+      });
       setSubmitFeedback('日報を削除しました');
       setTimeout(() => setSubmitFeedback(null), 3000);
     } catch (err: any) {
@@ -1004,13 +1048,11 @@ export const DailyReport: React.FC<DailyReportProps> = ({
     }
   };
 
-  // Parent progress calculation
-  const parentProgress = (parent: ParentTask | undefined, tasks: SubTask[]): number => {
-    if (parent?.progress != null) return Math.round(parent.progress);
-    const totalPlanned = tasks.reduce((s, t) => s + (t.planned_hours || 0), 0);
-    const totalActual = tasks.reduce((s, t) => s + (t.actual_hours || 0), 0);
-    if (totalPlanned === 0) return 0;
-    return Math.round((totalActual / totalPlanned) * 100);
+  // Parent progress calculation. 日報のカードは現在表示中のタスク集合に対して進捗を出す。
+  const parentProgress = (_parent: ParentTask | undefined, tasks: SubTask[]): number => {
+    if (tasks.length === 0) return 0;
+    const completed = tasks.filter(t => t.status === '済').length;
+    return Math.round((completed / tasks.length) * 100);
   };
 
   /* ============================================================
@@ -1238,6 +1280,9 @@ export const DailyReport: React.FC<DailyReportProps> = ({
     );
   };
 
+  const calendarDays = buildCalendarDays(calendarMonth);
+  const canMoveNextMonth = calendarMonth < today.slice(0, 7);
+
   return (
     <div className={cn("space-y-6", editMode && "pb-24")}>
       {/* Header */}
@@ -1247,13 +1292,97 @@ export const DailyReport: React.FC<DailyReportProps> = ({
             <h2 className="text-2xl lg:text-4xl font-bold tracking-tight text-[#1d1d1f]">日報</h2>
             <div className="text-xs lg:text-sm text-[#86868b] mt-2 flex items-center gap-2 flex-wrap">
               <span className="font-medium">{isHistoryMode ? '対象日' : '本日'}</span>
-              <input
-                type="date"
-                value={selectedDate}
-                max={today}
-                onChange={(e) => e.target.value && setSelectedDate(e.target.value)}
-                className="bg-white border border-gray-200 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-[#007aff]/20 cursor-pointer"
-              />
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setIsDatePickerOpen(v => !v)}
+                  disabled={editMode}
+                  title={editMode ? '編集中は日付を切り替えられません' : '日付を選択'}
+                  className="inline-flex items-center gap-1.5 bg-white border border-gray-200 rounded-md px-2 py-1 text-sm text-[#1d1d1f] focus:outline-none focus:ring-2 focus:ring-[#007aff]/20 disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  <Calendar size={14} className="text-[#007aff]" />
+                  <span>{fmtDate(selectedDate)}</span>
+                  {savedReportDates.has(selectedDate) && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-[#007aff]" title="保存済みの日報があります" />
+                  )}
+                </button>
+                {isDatePickerOpen && (
+                  <div className="absolute left-0 top-full mt-2 w-72 bg-white border border-gray-200 rounded-2xl shadow-xl z-50 p-3 text-[#1d1d1f]">
+                    <div className="flex items-center justify-between mb-2">
+                      <button
+                        type="button"
+                        onClick={() => setCalendarMonth(m => shiftMonth(m, -1))}
+                        className="px-2 py-1 rounded-lg text-sm font-bold hover:bg-gray-100"
+                        aria-label="前月"
+                      >
+                        ‹
+                      </button>
+                      <div className="text-sm font-bold">{monthLabel(calendarMonth)}</div>
+                      <button
+                        type="button"
+                        onClick={() => setCalendarMonth(m => shiftMonth(m, 1))}
+                        disabled={!canMoveNextMonth}
+                        className="px-2 py-1 rounded-lg text-sm font-bold hover:bg-gray-100 disabled:opacity-30 disabled:hover:bg-white"
+                        aria-label="次月"
+                      >
+                        ›
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-bold text-[#86868b] mb-1">
+                      {['日', '月', '火', '水', '木', '金', '土'].map(d => <div key={d}>{d}</div>)}
+                    </div>
+                    <div className="grid grid-cols-7 gap-1">
+                      {calendarDays.map((date, idx) => {
+                        if (!date) return <div key={`blank-${idx}`} className="h-8" />;
+                        const day = Number(date.slice(-2));
+                        const disabled = date > today;
+                        const selected = date === selectedDate;
+                        const hasReport = savedReportDates.has(date);
+                        return (
+                          <button
+                            key={date}
+                            type="button"
+                            disabled={disabled}
+                            onClick={() => {
+                              setSelectedDate(date);
+                              setIsDatePickerOpen(false);
+                            }}
+                            className={cn(
+                              'relative h-8 rounded-lg text-xs font-semibold transition-colors',
+                              selected ? 'bg-[#007aff] text-white' : 'hover:bg-blue-50 text-[#1d1d1f]',
+                              disabled && 'text-gray-300 cursor-not-allowed hover:bg-white',
+                            )}
+                          >
+                            {day}
+                            {hasReport && (
+                              <span className={cn(
+                                'absolute left-1/2 -translate-x-1/2 bottom-1 w-1 h-1 rounded-full',
+                                selected ? 'bg-white' : 'bg-[#007aff]',
+                              )} />
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="mt-3 flex items-center justify-between text-[10px] text-[#86868b]">
+                      <span className="inline-flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-[#007aff]" />
+                        日報履歴あり
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedDate(today);
+                          setIsDatePickerOpen(false);
+                        }}
+                        className="font-bold text-[#007aff] hover:underline"
+                      >
+                        今日
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
               {isHistoryMode && (
                 <button
                   onClick={() => setSelectedDate(today)}
@@ -1574,16 +1703,37 @@ export const DailyReport: React.FC<DailyReportProps> = ({
             </div>
           )}
           {summary ? (
-            <div className="prose prose-invert prose-sm max-w-none">
-              <ReactMarkdown>{summary}</ReactMarkdown>
-              <button
-                onClick={() => navigator.clipboard.writeText(summary)}
-                className="mt-4 flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest opacity-60 hover:opacity-100 transition-opacity"
-              >
-                <Copy size={14} />
-                Copy Summary
-              </button>
-            </div>
+            isHistoryMode ? (
+              <div className="prose prose-invert prose-sm max-w-none">
+                <ReactMarkdown>{summary}</ReactMarkdown>
+                <button
+                  onClick={() => navigator.clipboard.writeText(summary)}
+                  className="mt-4 flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest opacity-60 hover:opacity-100 transition-opacity"
+                >
+                  <Copy size={14} />
+                  Copy Summary
+                </button>
+              </div>
+            ) : (
+              <div>
+                <textarea
+                  value={summary}
+                  onChange={(e) => setSummary(e.target.value)}
+                  className="w-full min-h-[220px] px-4 py-3 bg-white/10 border border-white/20 rounded-xl focus:outline-none focus:ring-2 focus:ring-white/40 text-sm text-white placeholder:text-white/50 resize-y"
+                  placeholder="Summary を編集..."
+                />
+                <div className="mt-3 flex items-center justify-between gap-3">
+                  <span className="text-[10px] text-white/60">提出前に内容を直接編集できます。</span>
+                  <button
+                    onClick={() => navigator.clipboard.writeText(summary)}
+                    className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest opacity-70 hover:opacity-100 transition-opacity"
+                  >
+                    <Copy size={14} />
+                    Copy Summary
+                  </button>
+                </div>
+              </div>
+            )
           ) : (
             <div className="text-center py-8">
               <p className="text-white/60 italic text-sm">

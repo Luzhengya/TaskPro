@@ -42,7 +42,7 @@ import { groupSubTasksByWeek, computeWeekPriorityStats } from '../weekReport';
  * sessionStorage キー群。Dashboard の UI 状態を子タスク画面への往復で消えないように保持する。
  * 同タブ内は維持、タブを閉じれば消える（= 直感的な「会話セッション」スコープ）。
  *  - FILTER_SESSION_KEY    : 詳細検索 TaskFilter（キーワード等）
- *  - FILTER_TAB_KEY        : 案件レベルのタブ選択（遅延あり / 期限間近 等）
+ *  - FILTER_TAB_KEY        : 案件レベルのタブ選択（遅延あり / 期日間近 等）
  *  - LAST_CLICKED_TASK_KEY : 直前にクリックしたタスク ID（扁平リストで戻った時の位置復元）
  */
 const FILTER_SESSION_KEY = 'taskmaster_dashboard_filter';
@@ -109,22 +109,22 @@ type ProjectFilter =
   | 'in_progress'
   | 'completed';
 
-// 定例作業（type === 'meeting'）であることを示す小さなチップ。
+// 繰り返し作業（type === 'meeting'）であることを示す小さなチップ。
 // 親タスクの名前の横に出して通常案件と区別する。
-// （データ層では引き続き type === 'meeting' で管理。表示文言だけ「定例」）
+// （データ層では引き続き type === 'meeting' で管理。表示文言だけ「繰り返し」）
 const MeetingChip: React.FC = () => (
   <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-purple-100 text-purple-700 flex-shrink-0">
-    定例
+    繰り返し
   </span>
 );
 
 // Dot + label badge（カード上の状態バッジ）。danger=遅延あり / warn=着手遅れ /
-// urgent=期限間近 / soon=開始間近。色は STATUS_META と整合。
+// urgent=期日間近 / soon=開始間近。色は STATUS_META と整合。
 type BadgeTone = 'danger' | 'warn' | 'urgent' | 'soon';
 const BADGE_CFG: Record<BadgeTone, { text: string; color: string; dot: string; ring: string }> = {
   danger: { text: '遅延あり', color: 'text-red-600',    dot: 'bg-red-500',    ring: 'ring-red-500/15' },
   warn:   { text: '着手遅れ', color: 'text-amber-600',  dot: 'bg-amber-500',  ring: 'ring-amber-500/15' },
-  urgent: { text: '期限間近', color: 'text-orange-600', dot: 'bg-orange-500', ring: 'ring-orange-500/15' },
+  urgent: { text: '期日間近', color: 'text-orange-600', dot: 'bg-orange-500', ring: 'ring-orange-500/15' },
   soon:   { text: '開始間近', color: 'text-cyan-700',   dot: 'bg-cyan-500',   ring: 'ring-cyan-500/15' },
 };
 const DelayBadge: React.FC<{ tone: BadgeTone }> = ({ tone }) => {
@@ -244,7 +244,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, allSubTasks, 
     return m;
   }, [parentTasks]);
 
-  // 「期限間近」「開始間近」判定の地平線。getProjectStats でも nearTasksByFilter でも使う。
+  // 「期日間近」「開始間近」判定の地平線。getProjectStats でも nearTasksByFilter でも使う。
   // 既定 1 営業日。settings.near_threshold_days で 1〜30 の範囲に変更可能。
   // 営業日加算なので、金曜に「1 営業日先」と言えば月曜になる（土日スキップ）。
   const nearThresholdDays = Math.max(0, Math.min(30, settings?.near_threshold_days ?? 1));
@@ -263,7 +263,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, allSubTasks, 
     });
   }, [filterActive, allSubTasks, parentMap, taskFilter]);
 
-  // 「期限間近」「開始間近」タブ用：プロジェクトカードではなく、該当する **子タスク自体** の
+  // 「期日間近」「開始間近」タブ用：プロジェクトカードではなく、該当する **子タスク自体** の
   // 扁平リストを出すため、子タスク粒度で抽出する（タブカウントもこちらを使う）。
   // 親が visible parentMap に居ないものは除外（履歴行き / 完全削除）。
   const nearTasksByFilter = useMemo(() => {
@@ -272,7 +272,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, allSubTasks, 
     for (const t of allSubTasks) {
       const parent = parentMap.get(t.parent_task_id);
       if (!parent) continue;
-      // 期限間近：済以外 + 今日 ≤ 期日 ≤ horizon （期日基準）
+      // 期日間近：済以外 + 今日 ≤ 期日 ≤ horizon （期日基準）
       if (t.status !== '済') {
         const d = normalizeDate(t.due_date);
         if (d && d >= todayStr && d <= nearHorizon) finalDeadlineNear.push(t);
@@ -336,7 +336,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, allSubTasks, 
   /**
    * 案件カード（テーブルビュー）クリック時のハンドラ。
    *
-   *   - すべて / 期限間近 / 開始間近 :「特定状態のタスクへ直行」する意味が薄いので通常の onSelectTask
+   *   - すべて / 期日間近 / 開始間近 :「特定状態のタスクへ直行」する意味が薄いので通常の onSelectTask
    *   - 遅延あり / 着手遅れ / 進行中 / 完了 : その状態の **最初の子タスク** をハイライトしてジャンプ
    *
    * 該当する子タスクが無いときは onSelectTask に fallback（プロジェクト画面を開くだけ）。
@@ -572,8 +572,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, allSubTasks, 
       return d > max ? d : max;
     }, '');
 
-    // 期限間近：済以外 かつ 今日 ≤ due_date ≤ horizon
-    //   ※「期限間近」のラベルだが判定は **期日（due_date）** を使う（ユーザー要件）。
+    // 期日間近：済以外 かつ 今日 ≤ due_date ≤ horizon
+    //   ※「期日間近」のラベルだが判定は **期日（due_date）** を使う（ユーザー要件）。
     //   業務上「期日」のほうが日々の運用基準として強いため、こちらを基準にする。
     //   - 既に期日/期限を過ぎたものは hasDeadlineDelay（遅れ系ステータス）で拾われる
     //   - 「今日まさに期日」は最も間近として含む
@@ -593,7 +593,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, allSubTasks, 
       return sd >= todayStr && sd <= nearHorizon;
     });
 
-    // 優先度: 完了 > 遅延 > 着手遅れ > 期限間近 > 開始間近 > 進行中 > 未着手
+    // 優先度: 完了 > 遅延 > 着手遅れ > 期日間近 > 開始間近 > 進行中 > 未着手
     // 互斥（1 案件 = 1 ステータス）。
     let status: ProjectStatus;
     if (progress === 100) status = 'completed';
@@ -612,7 +612,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, allSubTasks, 
   const STATUS_META: Record<Exclude<ProjectStatus, 'completed' | 'in_progress' | 'not_started'>, { label: string; dot: string; text: string; borderClass: string; iconBg: string }> = {
     delayed:             { label: '遅延あり',   dot: 'bg-red-500',    text: 'text-red-600',    borderClass: 'border-l-red-500',    iconBg: 'bg-red-50 text-red-600' },
     start_delayed:       { label: '着手遅れ',   dot: 'bg-amber-400',  text: 'text-amber-600',  borderClass: 'border-l-amber-400',  iconBg: 'bg-amber-50 text-amber-600' },
-    final_deadline_near: { label: '期限間近',   dot: 'bg-orange-500', text: 'text-orange-600', borderClass: 'border-l-orange-500', iconBg: 'bg-orange-50 text-orange-600' },
+    final_deadline_near: { label: '期日間近',   dot: 'bg-orange-500', text: 'text-orange-600', borderClass: 'border-l-orange-500', iconBg: 'bg-orange-50 text-orange-600' },
     start_near:          { label: '開始間近',   dot: 'bg-cyan-500',   text: 'text-cyan-700',   borderClass: 'border-l-cyan-500',   iconBg: 'bg-cyan-50 text-cyan-700' },
   };
 
@@ -632,7 +632,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, allSubTasks, 
       completed: visibleSubs.filter(t => t.status === '済').length,
     };
   }, [allSubTasks, parentMap, nearTasksByFilter]);
-  // 「期限間近」「開始間近」タブで週報モードを表示するときに、子タスクハイライトに使う ID 集合。
+  // 「期日間近」「開始間近」タブで週報モードを表示するときに、子タスクハイライトに使う ID 集合。
   // 通常表示モード（テーブル / グリッド）では SubTaskSearchResults に切替するので使われない。
   const nearTaskIdSet = useMemo(() => {
     if (filter === 'final_deadline_near') return new Set(nearTasksByFilter.finalDeadlineNear.map(t => t.id));
@@ -642,7 +642,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, allSubTasks, 
 
   // タブごとに「表示する案件」を決める。
   //  - すべて                            : 全件
-  //  - 期限間近 / 開始間近 / 遅延 / 着手遅れ / 進行中 / 完了
+  //  - 期日間近 / 開始間近 / 遅延 / 着手遅れ / 進行中 / 完了
   //      : 「該当状態の子タスクを持つ案件」を表示する。
   //        バッジ件数は子タスク基準で数えているため、案件集約ステータスで絞ると
   //        「子は該当するが案件の集約状態は別」のとき、バッジに数字が出るのに一覧が
@@ -670,7 +670,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, allSubTasks, 
     return parentTasks.filter(p => parentIds.has(p.id));
   }, [filter, parentTasks, allSubTasks, nearTasksByFilter]);
 
-  // 子タスク行に出す「期限間近 / 開始間近」用の左ボーダー色クラス。
+  // 子タスク行に出す「期日間近 / 開始間近」用の左ボーダー色クラス。
   // 既存の「遅延 = 赤」と被らないよう、タブ色（orange / cyan）に合わせる。
   const nearHighlightBorder =
     filter === 'final_deadline_near' ? 'border-l-orange-500' :
@@ -680,7 +680,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, allSubTasks, 
     { key: 'all', label: 'すべて' },
     { key: 'delayed', label: '遅延あり', count: counts.delayed },
     { key: 'start_delayed', label: '着手遅れ', count: counts.start_delayed },
-    { key: 'final_deadline_near', label: '期限間近', count: counts.final_deadline_near },
+    { key: 'final_deadline_near', label: '期日間近', count: counts.final_deadline_near },
     { key: 'start_near', label: '開始間近', count: counts.start_near },
     { key: 'in_progress', label: '進行中', count: counts.in_progress },
     { key: 'completed', label: '完了', count: counts.completed },
@@ -829,7 +829,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, allSubTasks, 
 
       {isAdding && (
         <div className="mac-card p-6 animate-in fade-in slide-in-from-top-4">
-          {/* 追加モードのラジオ。定例作業モードでは期日 / テンプレ欄を非表示にする。 */}
+          {/* 追加モードのラジオ。繰り返し作業モードでは期日 / テンプレ欄を非表示にする。 */}
           <div className="mb-4 flex items-center gap-4 flex-wrap">
             <label className="inline-flex items-center gap-2 cursor-pointer">
               <input
@@ -851,20 +851,20 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, allSubTasks, 
                 onChange={() => setAddMode('meeting')}
                 className="accent-[#007aff]"
               />
-              <span className="text-sm font-medium text-[#1d1d1f]">定例作業</span>
+              <span className="text-sm font-medium text-[#1d1d1f]">繰り返し作業</span>
             </label>
           </div>
           <form onSubmit={handleAdd} className="flex flex-wrap gap-4 items-end">
             <div className="flex-1 min-w-[200px]">
               <label className="block text-xs font-bold text-[#86868b] uppercase tracking-widest mb-2">
-                {addMode === 'meeting' ? '定例作業名' : 'プロジェクト名'}
+                {addMode === 'meeting' ? '繰り返し作業名' : 'プロジェクト名'}
               </label>
               <input
                 type="text"
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
                 className="mac-input w-full"
-                placeholder={addMode === 'meeting' ? '例: 定例作業' : '例: システム更新 2026'}
+                placeholder={addMode === 'meeting' ? '例: 繰り返し作業' : '例: システム更新 2026'}
                 required
               />
             </div>
@@ -1038,7 +1038,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, allSubTasks, 
         </div>
       </div>
 
-      {/* 「期限間近」「開始間近」タブは、案件カードではなく該当する子タスクの
+      {/* 「期日間近」「開始間近」タブは、案件カードではなく該当する子タスクの
           扁平リストで表示する（タブ名どおりタスク単位で確認したいユースケース）。
           開始間近モードは「未着手 + 開始日が近い」前提なので実績工数は出さない。 */}
       {filter === 'final_deadline_near' && activeView !== 'weekly' ? (
@@ -1047,7 +1047,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, allSubTasks, 
           parentMap={parentMap}
           onJump={recordTaskClick}
           mode="final_deadline_near"
-          emptyHint="期限間近のタスクはありません。"
+          emptyHint="期日間近のタスクはありません。"
           scrollToTaskId={lastClickedTaskId}
         />
       ) : filter === 'start_near' && activeView !== 'weekly' ? (
