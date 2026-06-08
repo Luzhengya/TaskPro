@@ -36,6 +36,7 @@ import { taskService } from '../services/taskService';
 import { todayBeijing, addBusinessDays } from '../dateUtils';
 import { getEnabledViews, resolveActiveView, ProjectView } from '../viewPrefs';
 import { EMPTY_FILTER, isFilterActive, matchSubTask } from '../taskFilter';
+import { groupSubTasksByWeek, computeWeekPriorityStats } from '../weekReport';
 
 /**
  * sessionStorage キー群。Dashboard の UI 状態を子タスク画面への往復で消えないように保持する。
@@ -554,7 +555,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, allSubTasks, 
   };
 
   const getProjectStats = (parentId: string) => {
-    const subTasks = allSubTasks.filter(st => st.parent_task_id === parentId);
+    // 定例テンプレート（recurrence あり）は実タスクではないので統計対象外。
+    const subTasks = allSubTasks.filter(st => st.parent_task_id === parentId && !st.recurrence);
     if (subTasks.length === 0) return { progress: 0, planned: 0, actual: 0, hasSubTasks: false, hasDelay: false, status: 'not_started' as ProjectStatus, maxSubTaskDueDate: '' };
 
     const completed = subTasks.filter(st => st.status === '済').length;
@@ -684,8 +686,100 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, allSubTasks, 
   const displayedWithStats = displayedTasks.map(task => ({ task, stats: getProjectStats(task.id) }));
   const now = new Date();
   const weekLabel = `${now.getFullYear()}年${now.getMonth() + 1}月 第${Math.ceil(now.getDate() / 7)}週`;
+  // 定例テンプレート（recurrence あり）は実タスクではないため、週報・統計には含めない。
+  // テンプレから生成された実体（recurrence_source_id あり）は通常タスクとして扱う。
   const getSubTasks = (parentId: string) =>
-    allSubTasks.filter(st => st.parent_task_id === parentId);
+    allSubTasks.filter(st => st.parent_task_id === parentId && !st.recurrence);
+
+  // 週報ヘッダの「本週・来週」優先度別件数。表示中プロジェクト配下の全子タスクから集計。
+  const weekPriorityStats = useMemo(() => {
+    const subs = displayedTasks.flatMap(task => getSubTasks(task.id));
+    return computeWeekPriorityStats(subs);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [displayedTasks, allSubTasks]);
+
+  // 週報モードの子タスク 1 行を描画。週分段で跨週タスクが複数セグメントに重複表示されるため、
+  // key の衝突を避ける目的で keyPrefix を受け取る。
+  const renderWeeklySubRow = (t: SubTask, keyPrefix: string) => {
+    const isLate = DELAYED_STATUSES.has(t.status);
+    const isStartDelay = t.status === '着手遅れ';
+    const showDelayReason = !!t.delay_reason && (
+      (filter === 'delayed' && (t.status === '遅れ' || t.status === '期限遅れ')) ||
+      (filter === 'start_delayed' && isStartDelay)
+    );
+    const isNearHighlight = !isLate && nearTaskIdSet.has(t.id);
+    return (
+      <React.Fragment key={`${keyPrefix}-${t.id}`}>
+        <div
+          title={t.remarks ? `備考: ${t.remarks}` : undefined}
+          className={cn(
+            "grid items-center gap-3 px-3.5 py-2 my-1 bg-white rounded-lg border border-black/5 text-[12.5px] transition-all hover:border-[#007aff] hover:translate-x-0.5 min-w-[880px]",
+            isLate && "border-l-[3px] border-l-red-500",
+            isNearHighlight && cn("border-l-[3px]", nearHighlightBorder),
+          )}
+          style={{ gridTemplateColumns: '18px minmax(150px,1.5fr) 110px 90px 100px 100px 100px 110px' }}
+        >
+          <div className="text-gray-300">
+            <ChevronRight size={10} />
+          </div>
+          <div className="font-semibold text-[#1d1d1f] truncate" title={t.remarks || t.task_name}>{t.task_name}</div>
+          <div>
+            <span className={cn("inline-flex px-2 py-0.5 rounded-full text-[11px] font-semibold", SUBTASK_STATUS_PILL[t.status] || 'bg-gray-100 text-gray-700')}>
+              {t.status}
+            </span>
+          </div>
+          <div>
+            {t.priority && PRIORITY_META[t.priority] ? (
+              <span className={cn("inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold", PRIORITY_META[t.priority].cls)}>
+                <BarChart3 size={10} />
+                {PRIORITY_META[t.priority].label}
+              </span>
+            ) : (
+              <span className="text-gray-300">—</span>
+            )}
+          </div>
+          <div className="text-[#86868b] tabular-nums">{t.start_date || '—'}</div>
+          <div className={cn("tabular-nums", isLate ? "text-red-500 font-bold" : "text-[#86868b]")}>{t.due_date || '—'}</div>
+          <div className={cn("tabular-nums", t.status === '期限遅れ' ? "text-red-500 font-bold" : "text-[#86868b]")}>{t.final_deadline || '—'}</div>
+          <div className="tabular-nums text-[#86868b]">
+            <span>{t.planned_hours}h</span>
+            <span className="text-gray-300 mx-1">/</span>
+            <span className="text-[#007aff] font-semibold">{t.actual_hours ?? 0}h</span>
+          </div>
+        </div>
+
+        {showDelayReason && (
+          <div
+            className={cn(
+              "flex items-center gap-2 px-3.5 py-2 mb-1.5 -mt-0.5 rounded-lg text-[12px] min-w-[880px]",
+              isStartDelay ? "bg-amber-50" : "bg-red-50"
+            )}
+          >
+            <AlertTriangle
+              size={13}
+              className={cn("flex-shrink-0", isStartDelay ? "text-amber-500" : "text-red-500")}
+            />
+            <span
+              className={cn(
+                "px-1.5 py-0.5 rounded font-bold text-[10.5px] flex-shrink-0",
+                isStartDelay ? "bg-amber-100 text-amber-700" : "bg-red-100 text-red-700"
+              )}
+            >
+              遅延理由
+            </span>
+            <span className={cn("flex-1 min-w-0 truncate", isStartDelay ? "text-amber-800" : "text-red-800")} title={t.delay_reason}>
+              {t.delay_reason}
+            </span>
+            {!!t.delay_impact_days && (
+              <span className={cn("font-bold whitespace-nowrap flex-shrink-0", isStartDelay ? "text-amber-600" : "text-red-600")}>
+                {t.delay_impact_days}日遅延
+              </span>
+            )}
+          </div>
+        )}
+      </React.Fragment>
+    );
+  };
 
   return (
     <div className="space-y-8">
@@ -972,6 +1066,34 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, allSubTasks, 
             </div>
           </div>
 
+          {/* 本週・来週の優先度別件数の集計バー（標題が混まないよう独立した 2 行目に置く）。
+              跨週タスクは両週にカウントされる。優先度 A/B/C は 高/中/低 表示。 */}
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 px-4 sm:px-5 py-2 border-b border-black/5 text-[11px] bg-white/50">
+            {([
+              { label: '本週', cnt: weekPriorityStats.current },
+              { label: '来週', cnt: weekPriorityStats.next },
+            ] as const).map(({ label, cnt }) => (
+              <div key={label} className="flex items-center gap-2">
+                <span className="font-bold text-[#1d1d1f]">{label}</span>
+                {(['A', 'B', 'C'] as Priority[]).map(p => (
+                  <span
+                    key={p}
+                    className={cn(
+                      'inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md font-bold tabular-nums',
+                      PRIORITY_META[p].cls,
+                    )}
+                  >
+                    {PRIORITY_META[p].label}
+                    <span>{cnt[p]}</span>
+                  </span>
+                ))}
+                <span className="text-[#86868b] tabular-nums">
+                  計 {cnt.A + cnt.B + cnt.C}
+                </span>
+              </div>
+            ))}
+          </div>
+
           {/* Column header - hidden on mobile (card layout instead) */}
           <div
             className="hidden lg:grid items-center gap-3 px-5 h-11 text-[11px] font-bold text-[#86868b] uppercase tracking-wider bg-[#f5f5f7]/80 border-b border-black/5 min-w-[820px]"
@@ -1148,89 +1270,48 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, allSubTasks, 
                             <div>期限</div>
                             <div>予定/実績</div>
                           </div>
-                          {subs.map(t => {
-                            const isLate = DELAYED_STATUSES.has(t.status);
-                            const isStartDelay = t.status === '着手遅れ';
-                            // フィルター切替時、対象の遅延タスク下に遅延理由行を表示する。
-                            const showDelayReason = !!t.delay_reason && (
-                              (filter === 'delayed' && (t.status === '遅れ' || t.status === '期限遅れ')) ||
-                              (filter === 'start_delayed' && isStartDelay)
-                            );
-                            // 「期限間近」「開始間近」タブ選択時、該当する子タスクを左ボーダーで強調する。
-                            // 遅延ハイライト（赤）が既に出ていれば被せず、そちら優先（より緊急度が高い）。
-                            const isNearHighlight = !isLate && nearTaskIdSet.has(t.id);
+                          {(() => {
+                            const grouping = groupSubTasksByWeek(subs);
                             return (
-                              <React.Fragment key={t.id}>
-                              <div
-                                title={t.remarks ? `備考: ${t.remarks}` : undefined}
-                                className={cn(
-                                  "grid items-center gap-3 px-3.5 py-2 my-1 bg-white rounded-lg border border-black/5 text-[12.5px] transition-all hover:border-[#007aff] hover:translate-x-0.5 min-w-[880px]",
-                                  isLate && "border-l-[3px] border-l-red-500",
-                                  isNearHighlight && cn("border-l-[3px]", nearHighlightBorder),
+                              <>
+                                {grouping.anomalies.length > 0 && (
+                                  <div className="my-1.5 rounded-lg border border-red-200 bg-red-50/50 overflow-hidden">
+                                    <div className="flex items-center gap-1.5 px-3.5 py-1.5 text-[11px] font-bold text-red-700 bg-red-100/60 min-w-[880px]">
+                                      <AlertTriangle size={12} />
+                                      日付異常（開始日・期日が未設定のタスク）
+                                    </div>
+                                    <div className="px-1">
+                                      {grouping.anomalies.map(t => renderWeeklySubRow(t, 'anomaly'))}
+                                    </div>
+                                  </div>
                                 )}
-                                style={{ gridTemplateColumns: '18px minmax(150px,1.5fr) 110px 90px 100px 100px 100px 110px' }}
-                              >
-                                <div className="text-gray-300">
-                                  <ChevronRight size={10} />
-                                </div>
-                                <div className="font-semibold text-[#1d1d1f] truncate" title={t.remarks || t.task_name}>{t.task_name}</div>
-                                <div>
-                                  <span className={cn("inline-flex px-2 py-0.5 rounded-full text-[11px] font-semibold", SUBTASK_STATUS_PILL[t.status] || 'bg-gray-100 text-gray-700')}>
-                                    {t.status}
-                                  </span>
-                                </div>
-                                <div>
-                                  {t.priority && PRIORITY_META[t.priority] ? (
-                                    <span className={cn("inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold", PRIORITY_META[t.priority].cls)}>
-                                      <BarChart3 size={10} />
-                                      {PRIORITY_META[t.priority].label}
-                                    </span>
-                                  ) : (
-                                    <span className="text-gray-300">—</span>
-                                  )}
-                                </div>
-                                <div className="text-[#86868b] tabular-nums">{t.start_date || '—'}</div>
-                                <div className={cn("tabular-nums", isLate ? "text-red-500 font-bold" : "text-[#86868b]")}>{t.due_date || '—'}</div>
-                                <div className={cn("tabular-nums", t.status === '期限遅れ' ? "text-red-500 font-bold" : "text-[#86868b]")}>{t.final_deadline || '—'}</div>
-                                <div className="tabular-nums text-[#86868b]">
-                                  <span>{t.planned_hours}h</span>
-                                  <span className="text-gray-300 mx-1">/</span>
-                                  <span className="text-[#007aff] font-semibold">{t.actual_hours ?? 0}h</span>
-                                </div>
-                              </div>
-
-                              {showDelayReason && (
-                                <div
-                                  className={cn(
-                                    "flex items-center gap-2 px-3.5 py-2 mb-1.5 -mt-0.5 rounded-lg text-[12px] min-w-[880px]",
-                                    isStartDelay ? "bg-amber-50" : "bg-red-50"
-                                  )}
-                                >
-                                  <AlertTriangle
-                                    size={13}
-                                    className={cn("flex-shrink-0", isStartDelay ? "text-amber-500" : "text-red-500")}
-                                  />
-                                  <span
-                                    className={cn(
-                                      "px-1.5 py-0.5 rounded font-bold text-[10.5px] flex-shrink-0",
-                                      isStartDelay ? "bg-amber-100 text-amber-700" : "bg-red-100 text-red-700"
-                                    )}
-                                  >
-                                    遅延理由
-                                  </span>
-                                  <span className={cn("flex-1 min-w-0 truncate", isStartDelay ? "text-amber-800" : "text-red-800")} title={t.delay_reason}>
-                                    {t.delay_reason}
-                                  </span>
-                                  {!!t.delay_impact_days && (
-                                    <span className={cn("font-bold whitespace-nowrap flex-shrink-0", isStartDelay ? "text-amber-600" : "text-red-600")}>
-                                      {t.delay_impact_days}日遅延
-                                    </span>
-                                  )}
-                                </div>
-                              )}
-                              </React.Fragment>
+                                {grouping.groups.map(({ segment, tasks }) => {
+                                  const isCurrent = segment.key === 'current';
+                                  return (
+                                    <div
+                                      key={segment.key}
+                                      className={cn(
+                                        "my-1.5 rounded-lg overflow-hidden",
+                                        isCurrent && "bg-[#007aff]/[0.06] ring-1 ring-[#007aff]/20",
+                                      )}
+                                    >
+                                      <div className={cn(
+                                        "flex items-center gap-2 px-3.5 py-1.5 text-[11px] font-bold min-w-[880px]",
+                                        isCurrent ? "text-[#007aff] bg-[#007aff]/[0.08]" : "text-[#86868b] bg-black/[0.02]",
+                                      )}>
+                                        <span>{segment.label}</span>
+                                        {segment.rangeLabel && <span className="font-medium opacity-70">({segment.rangeLabel})</span>}
+                                        <span className="ml-auto font-medium opacity-70">{tasks.length} 件</span>
+                                      </div>
+                                      <div className="px-1">
+                                        {tasks.map(t => renderWeeklySubRow(t, segment.key))}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </>
                             );
-                          })}
+                          })()}
                           <div className="flex justify-end pt-2">
                             <button
                               onClick={() => onSelectTask(task)}

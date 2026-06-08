@@ -496,11 +496,17 @@ export const DailyReport: React.FC<DailyReportProps> = ({
     const totalPlanned = nonReminder.reduce((sum, t) => sum + (t.planned_hours || 0), 0);
     const totalActual = nonReminder.reduce((sum, t) => sum + (t.actual_hours || 0), 0);
     const delayed = nonReminder.filter(t => t.status === '遅れ' || t.status === '期限遅れ').length;
+    // 優先度別件数（円グラフ用）
+    const byPriority = { A: 0, B: 0, C: 0 };
+    for (const t of nonReminder) {
+      if (t.priority === 'A' || t.priority === 'B' || t.priority === 'C') byPriority[t.priority]++;
+    }
     return {
       total: nonReminder.length,
       planned: totalPlanned,
       actual: totalActual,
       delayed,
+      byPriority,
     };
   }, [reportTasks, categorized.anomalyCodes]);
 
@@ -1369,7 +1375,7 @@ export const DailyReport: React.FC<DailyReportProps> = ({
         <StatCard label="集計タスク" value={`${stats.total} 件`} accent="text-[#007aff]" />
         <StatCard label="予定工数" value={`${stats.planned} h`} accent="text-[#1d1d1f]" />
         <StatCard label="実績工数" value={`${stats.actual} h`} accent="text-[#007aff]" />
-        <StatCard label="遅延タスク" value={`${stats.delayed} 件`} accent="text-red-500" />
+        <PriorityPieCard counts={stats.byPriority} />
       </div>
 
       {/* Grouped Task Cards by Category。編集モード中は抽出 list view（旧 7 セクション）、
@@ -1665,6 +1671,41 @@ const StatCard: React.FC<{ label: string; value: string; accent: string }> = ({ 
     <div className={cn('text-xl lg:text-2xl font-bold', accent)}>{value}</div>
   </div>
 );
+
+// 優先度 A/B/C の円グラフ（CSS conic-gradient。チャートライブラリ非依存）。
+const PRIORITY_PIE_COLOR = { A: '#ef4444', B: '#f59e0b', C: '#d1d5db' } as const;
+const PRIORITY_PIE_LABEL = { A: '高', B: '中', C: '低' } as const;
+const PriorityPieCard: React.FC<{ counts: { A: number; B: number; C: number } }> = ({ counts }) => {
+  const { A, B, C } = counts;
+  const sum = A + B + C;
+  // 角度（0 件のときは均等グレー）
+  const aDeg = sum ? (A / sum) * 360 : 0;
+  const bDeg = sum ? (B / sum) * 360 : 0;
+  const background = sum
+    ? `conic-gradient(${PRIORITY_PIE_COLOR.A} 0deg ${aDeg}deg, ${PRIORITY_PIE_COLOR.B} ${aDeg}deg ${aDeg + bDeg}deg, ${PRIORITY_PIE_COLOR.C} ${aDeg + bDeg}deg 360deg)`
+    : '#e5e7eb';
+  return (
+    <div className="mac-card p-3 lg:p-4">
+      <div className="text-[10px] lg:text-xs text-[#86868b] mb-1 lg:mb-2">優先度</div>
+      <div className="flex items-center gap-3">
+        <div
+          className="w-11 h-11 lg:w-12 lg:h-12 rounded-full flex-shrink-0"
+          style={{ background }}
+          title={`高 ${A} / 中 ${B} / 低 ${C}`}
+        />
+        <div className="flex flex-col gap-0.5 text-[11px] lg:text-xs min-w-0">
+          {(['A', 'B', 'C'] as const).map(p => (
+            <div key={p} className="flex items-center gap-1.5 tabular-nums">
+              <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ background: PRIORITY_PIE_COLOR[p] }} />
+              <span className="text-[#86868b]">{PRIORITY_PIE_LABEL[p]}</span>
+              <span className="font-bold text-[#1d1d1f]">{counts[p]}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
 
 // 実績工数を手入力する小さな数値インプット。
 // 入力中はローカル状態で保持し、フォーカスアウト / Enter で確定保存する
