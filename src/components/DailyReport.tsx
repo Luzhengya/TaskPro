@@ -233,8 +233,13 @@ export const DailyReport: React.FC<DailyReportProps> = ({
     catch { return null; }
   });
   const restoredScrollRef = useRef(false);
-  // 定例作業の実体自動生成の二重実行ガード（処理中シグネチャを保持）。
-  const materializeRanRef = useRef<string>('');
+  const allSubTasksRef = useRef<SubTask[]>(allSubTasks);
+  // 定例作業の実体自動生成ガード。同一テンプレート x 同一日の生成中/生成済みキーを保持する。
+  const materializingRecurringKeysRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    allSubTasksRef.current = allSubTasks;
+  }, [allSubTasks]);
 
   // カテゴリセクションの折叠状態。既定: 全て折叠（ユーザー要件）。
   // 中身（プロジェクト見出し）の既定: 展開（折叠状態を Set で管理し、要素が入っていれば折叠扱い）。
@@ -328,7 +333,7 @@ export const DailyReport: React.FC<DailyReportProps> = ({
   //     二重生成のリスクも無い（毎日その日が来た時だけ生成）。
   //   - 履歴日表示中は生成しない（過去を遡って作らない）。
   //   - allSubTasks は親集約で更新されるため、生成 → 反映 → 再評価で収束する。
-  //     同一バッチの二重生成を防ぐため materializeRanRef でシグネチャ管理。
+  //     途中更新で effect が再実行されても、同一テンプレート x 同一日は生成しない。
   useEffect(() => {
     if (isHistoryMode) return;
     const templates = allSubTasks.filter(
@@ -336,19 +341,29 @@ export const DailyReport: React.FC<DailyReportProps> = ({
     );
     const due = templates.filter(t => matchesRecurrence(t.recurrence!, today));
     const missing = due.filter(
-      tmpl => !allSubTasks.some(
-        t => t.recurrence_source_id === tmpl.id && t.start_date === today,
-      ),
+      tmpl => {
+        const key = `${today}|${tmpl.id}`;
+        return !materializingRecurringKeysRef.current.has(key)
+          && !allSubTasks.some(
+            t => t.recurrence_source_id === tmpl.id && t.start_date === today,
+          );
+      },
     );
     if (missing.length === 0) return;
 
-    const sig = today + '|' + missing.map(t => t.id).sort().join(',');
-    if (materializeRanRef.current === sig) return;
-    materializeRanRef.current = sig;
+    for (const tmpl of missing) {
+      materializingRecurringKeysRef.current.add(`${today}|${tmpl.id}`);
+    }
 
     (async () => {
       for (const tmpl of missing) {
+        const key = `${today}|${tmpl.id}`;
         try {
+          const alreadyExists = allSubTasksRef.current.some(
+            t => t.recurrence_source_id === tmpl.id && t.start_date === today,
+          );
+          if (alreadyExists) continue;
+
           await taskService.addSubTask({
             parent_task_id: tmpl.parent_task_id,
             system: tmpl.system || '',
@@ -368,6 +383,7 @@ export const DailyReport: React.FC<DailyReportProps> = ({
             flag: 0,
           });
         } catch (err) {
+          materializingRecurringKeysRef.current.delete(key);
           console.error('Failed to materialize recurring task:', err);
         }
       }
