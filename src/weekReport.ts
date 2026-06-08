@@ -136,26 +136,26 @@ export function groupSubTasksByWeek(subs: SubTask[], today?: string): WeeklyGrou
 
 export type PriorityCount = Record<Priority, number>;
 export interface WeekPriorityStats {
-  current: PriorityCount; // 今週
-  next: PriorityCount;    // 来週
+  prev: PriorityCount;    // 先週
+  current: PriorityCount; // 今週（本週）
 }
 
-/** 与えられた全子タスクから、今週・来週それぞれの優先度別件数を集計する。
+/** 与えられた全子タスクから、先週・本週それぞれの優先度別件数を集計する。
  *  跨週タスクは重なる週の両方にカウントされる（表示と整合）。
  *  日付不完全なタスクは集計対象外。 */
 export function computeWeekPriorityStats(subs: SubTask[], today?: string): WeekPriorityStats {
   const segments = getWeekSegments(today);
+  const prev = segments.find(s => s.key === 'prev')!;
   const current = segments.find(s => s.key === 'current')!;
-  const next = segments.find(s => s.key === 'next')!;
   const empty = (): PriorityCount => ({ A: 0, B: 0, C: 0 });
-  const stats: WeekPriorityStats = { current: empty(), next: empty() };
+  const stats: WeekPriorityStats = { prev: empty(), current: empty() };
 
   for (const t of subs) {
     if (!hasCompleteDates(t)) continue;
     const pri = t.priority;
     if (pri !== 'A' && pri !== 'B' && pri !== 'C') continue;
+    if (overlapsWeek(t, prev.monday, prev.sunday)) stats.prev[pri]++;
     if (overlapsWeek(t, current.monday, current.sunday)) stats.current[pri]++;
-    if (overlapsWeek(t, next.monday, next.sunday)) stats.next[pri]++;
   }
   return stats;
 }
