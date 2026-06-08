@@ -1065,6 +1065,7 @@ export const DailyReport: React.FC<DailyReportProps> = ({
       title={t.remarks ? `備考: ${t.remarks}` : undefined}
       className={cn(
         "flex items-stretch group hover:bg-gray-50/50 transition-colors",
+        t.status === '済' && "bg-gray-50/80",
         // 戻り先ハイライト：sessionStorage で覚えていた最後にクリックしたタスクなら背景を一瞬強調
         lastClickedDailyTaskId === t.id && "bg-blue-50/60",
       )}

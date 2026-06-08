@@ -728,6 +728,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ parentTasks, allSubTasks, 
           title={t.remarks ? `備考: ${t.remarks}` : undefined}
           className={cn(
             "grid items-center gap-3 px-3.5 py-2 my-1 bg-white rounded-lg border border-black/5 text-[12.5px] transition-all hover:border-[#007aff] hover:translate-x-0.5 min-w-[880px]",
+            t.status === '済' && "bg-gray-50 border-gray-200 hover:border-gray-300",
             isLate && "border-l-[3px] border-l-red-500",
             isNearHighlight && cn("border-l-[3px]", nearHighlightBorder),
           )}

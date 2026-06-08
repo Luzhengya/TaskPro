@@ -24,6 +24,7 @@ import {
 
 interface FileImportProps {
   onImportComplete: () => void;
+  onImportingChange?: (isImporting: boolean) => void;
 }
 
 const NO_DATA_MESSAGE = 'インポートするデータがありません。';
@@ -58,17 +59,23 @@ function isRowEmpty(row: unknown[]): boolean {
   );
 }
 
-export const FileImport: React.FC<FileImportProps> = ({ onImportComplete }) => {
+export const FileImport: React.FC<FileImportProps> = ({ onImportComplete, onImportingChange }) => {
   const [isImporting, setIsImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+
+  const updateImporting = useCallback((next: boolean) => {
+    setIsImporting(next);
+    onImportingChange?.(next);
+  }, [onImportingChange]);
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     const file = acceptedFiles[0];
     if (!file) return;
 
-    setIsImporting(true);
+    updateImporting(true);
     setError(null);
+    setSuccess(false);
 
     try {
       const reader = new FileReader();
@@ -247,16 +254,16 @@ export const FileImport: React.FC<FileImportProps> = ({ onImportComplete }) => {
             err instanceof Error ? err.message : 'Excel のインポートに失敗しました。';
           setError(message);
         } finally {
-          setIsImporting(false);
+          updateImporting(false);
         }
       };
       reader.readAsArrayBuffer(file);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'ファイルの読み込みに失敗しました。';
       setError(message);
-      setIsImporting(false);
+      updateImporting(false);
     }
-  }, [onImportComplete]);
+  }, [onImportComplete, updateImporting]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,

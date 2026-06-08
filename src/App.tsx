@@ -62,6 +62,7 @@ export default function App() {
   const [settings, setSettings] = useState<UserSettings | null>(null);
   // 日報メニューに出す件数（is_in_report のタスク数）。
   const [reportCount, setReportCount] = useState(0);
+  const [isImporting, setIsImporting] = useState(false);
 
   // メール認証コードの検証情報を一時保持（送信 → 入力 の2ステップ間で引き継ぐ）
   const signupVerifyRef = useRef<{ email: string; verificationId: string } | null>(null);
@@ -370,7 +371,15 @@ export default function App() {
       case 'history':
         return <History onSelectTask={setSelectedParentTask} settings={settings} />;
       case 'import':
-        return <FileImport onImportComplete={() => setActiveTab('dashboard')} />;
+        return (
+          <FileImport
+            onImportingChange={setIsImporting}
+            onImportComplete={() => {
+              setIsImporting(false);
+              setActiveTab('dashboard');
+            }}
+          />
+        );
       case 'reports':
         return (
           <DailyReport
@@ -407,6 +416,7 @@ export default function App() {
       <Layout
         activeTab={activeTab}
         setActiveTab={(tab) => {
+          if (isImporting) return;
           setActiveTab(tab);
           setSelectedParentTask(null);
           setHighlightTaskId(null);
@@ -414,6 +424,7 @@ export default function App() {
         user={user}
         onLogout={handleLogout}
         reportCount={reportCount}
+        navigationDisabled={isImporting}
       >
         {renderContent()}
       </Layout>

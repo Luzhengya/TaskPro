@@ -10,6 +10,8 @@ interface LayoutProps {
   onLogout: () => void;
   /** 日報メニューに表示する件数（is_in_report のタスク数）。0 のときは非表示。 */
   reportCount?: number;
+  /** インポート中など、画面遷移で処理が見えなくなる状態ではメニュー切替を止める。 */
+  navigationDisabled?: boolean;
 }
 
 const NAV_ITEMS = [
@@ -21,7 +23,7 @@ const NAV_ITEMS = [
   { id: 'settings', label: '設定', icon: Settings },
 ];
 
-export const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTab, user, onLogout, reportCount = 0 }) => {
+export const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTab, user, onLogout, reportCount = 0, navigationDisabled = false }) => {
   const [isSidebarOpen, setIsSidebarOpen] = React.useState(false);
 
   const navItems = NAV_ITEMS;
@@ -62,13 +64,15 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTa
           {navItems.slice(0, 4).map((item) => (
             <button
               key={item.id}
+              disabled={navigationDisabled}
+              title={navigationDisabled ? 'インポート中はメニューを切り替えられません' : undefined}
               onClick={() => {
                 setActiveTab(item.id);
                 setIsSidebarOpen(false);
               }}
               className={`w-full mac-sidebar-item ${
                 activeTab === item.id ? 'active' : ''
-              }`}
+              } ${navigationDisabled ? 'opacity-50 cursor-not-allowed' : ''}`}
             >
               <item.icon size={18} className={activeTab === item.id ? 'text-white' : 'text-[#007aff]'} />
               <span>{item.label}</span>
@@ -84,13 +88,15 @@ export const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTa
           {navItems.slice(4).map((item) => (
             <button
               key={item.id}
+              disabled={navigationDisabled}
+              title={navigationDisabled ? 'インポート中はメニューを切り替えられません' : undefined}
               onClick={() => {
                 setActiveTab(item.id);
                 setIsSidebarOpen(false);
               }}
               className={`w-full mac-sidebar-item ${
                 activeTab === item.id ? 'active' : ''
-              }`}
+              } ${navigationDisabled ? 'opacity-50 cursor-not-allowed' : ''}`}
             >
               <item.icon size={18} className={activeTab === item.id ? 'text-white' : 'text-[#86868b]'} />
               <span>{item.label}</span>
