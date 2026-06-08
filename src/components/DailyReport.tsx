@@ -113,6 +113,17 @@ const fmtDate = (dateStr?: string) => {
 // Today as YYYY-MM-DD（北京時間 UTC+8 固定で算出。端末タイムゾーンに依存しない）。
 const todayStr = () => todayBeijing();
 
+const numericHours = (value: number | undefined): number => {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+};
+
+const reportActualDelta = (task: SubTask, snapshot: Record<string, SubTask>): number => {
+  const current = numericHours(task.actual_hours);
+  const before = snapshot[task.id];
+  if (!before) return current;
+  return Number(Math.max(0, current - numericHours(before.actual_hours)).toFixed(2));
+};
+
 const monthLabel = (month: string) => {
   const [y, m] = month.split('-').map(Number);
   return `${y}年${m}月`;
@@ -471,6 +482,12 @@ export const DailyReport: React.FC<DailyReportProps> = ({
     [reportTasks, allSubTasks, visibleParentMap, today],
   );
 
+  // 提出・集計・確定後 summary の対象。最終的に日報へ残った task からリマインド対象を除外する。
+  const reportableTasks = useMemo(
+    () => reportTasks.filter(t => !categorized.anomalyCodes.has(t.id)),
+    [reportTasks, categorized.anomalyCodes],
+  );
+
   // 戻り先スクロール復元：
   //   1. lastClickedDailyTaskId のタスクが categorized のどこに居るかを探す
   //   2. 居なければ sessionStorage の sibling list から「次の id」を試す（無ければ「前の id」）
@@ -546,23 +563,25 @@ export const DailyReport: React.FC<DailyReportProps> = ({
 
   // Stats（リマインド対象タスクは集計から除外する。ユーザー要件：日報の件数には含めない）。
   const stats = useMemo(() => {
-    const nonReminder = reportTasks.filter(t => !categorized.anomalyCodes.has(t.id));
-    const totalPlanned = nonReminder.reduce((sum, t) => sum + (t.planned_hours || 0), 0);
-    const totalActual = nonReminder.reduce((sum, t) => sum + (t.actual_hours || 0), 0);
-    const delayed = nonReminder.filter(t => t.status === '遅れ' || t.status === '期限遅れ').length;
+    const totalPlanned = reportableTasks.reduce((sum, t) => sum + (t.planned_hours || 0), 0);
+    const hasDiffBaseline = Object.keys(editSnapshot).length > 0;
+    const totalActual = snapshot && !hasDiffBaseline
+      ? snapshot.total_actual
+      : reportableTasks.reduce((sum, t) => sum + reportActualDelta(t, editSnapshot), 0);
+    const delayed = reportableTasks.filter(t => t.status === '遅れ' || t.status === '期限遅れ').length;
     // 優先度別件数（円グラフ用）
     const byPriority = { A: 0, B: 0, C: 0 };
-    for (const t of nonReminder) {
+    for (const t of reportableTasks) {
       if (t.priority === 'A' || t.priority === 'B' || t.priority === 'C') byPriority[t.priority]++;
     }
     return {
-      total: nonReminder.length,
+      total: reportableTasks.length,
       planned: totalPlanned,
       actual: totalActual,
       delayed,
       byPriority,
     };
-  }, [reportTasks, categorized.anomalyCodes]);
+  }, [reportableTasks, editSnapshot, snapshot]);
 
   // 各カテゴリ内の親 ID を表示順（parent.order）でソートしたもの。
   const sortedParentIdsByCategory = useMemo(() => {
@@ -581,8 +600,8 @@ export const DailyReport: React.FC<DailyReportProps> = ({
 
   // 確定後ビュー（新カテゴリ 7 種類）。snapshot を参照して「完了」を判定。
   const confirmedView = useMemo(
-    () => buildConfirmedDisplayData(reportTasks, editSnapshot, today),
-    [reportTasks, editSnapshot, today],
+    () => buildConfirmedDisplayData(reportableTasks, editSnapshot, today),
+    [reportableTasks, editSnapshot, today],
   );
   const sortedConfirmedParentIdsByCategory = useMemo(() => {
     const result = {} as Record<ConfirmedCategory, string[]>;
@@ -602,7 +621,7 @@ export const DailyReport: React.FC<DailyReportProps> = ({
   // など、カテゴリ非依存の処理で使われている）。
   const groupedTasks = useMemo(() => {
     const groups = new Map<string, SubTask[]>();
-    reportTasks.forEach(t => {
+    reportableTasks.forEach(t => {
       const list = groups.get(t.parent_task_id) || [];
       list.push(t);
       groups.set(t.parent_task_id, list);
@@ -611,7 +630,7 @@ export const DailyReport: React.FC<DailyReportProps> = ({
       list.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
     });
     return groups;
-  }, [reportTasks]);
+  }, [reportableTasks]);
 
   // Sorted parent IDs（カテゴリ非依存。AI サマリー生成等で利用）
   const parentIds = useMemo(() => {
@@ -922,12 +941,8 @@ export const DailyReport: React.FC<DailyReportProps> = ({
     if (isConfirming) return;
     setIsConfirming(true);
     try {
-      // 現在 is_in_report=true で visible な親配下の task を「現状」とする
-      const currentReportTasks = allSubTasks.filter(
-        t => t.is_in_report && parentMap.has(t.parent_task_id),
-      );
       const summaryText = buildDailyReportSummary(
-        currentReportTasks,
+        reportableTasks,
         editSnapshot,
         parentMap,
         today,
@@ -953,7 +968,7 @@ export const DailyReport: React.FC<DailyReportProps> = ({
       // サマリーが空（＝確定を経ずに直接提出）の場合はテンプレートで生成しておく。
       let finalSummary = summary;
       if (!finalSummary.trim()) {
-        finalSummary = buildDailyReportSummary(reportTasks, editSnapshot, parentMap, today);
+        finalSummary = buildDailyReportSummary(reportableTasks, editSnapshot, parentMap, today);
         setSummary(finalSummary);
       }
 
@@ -961,7 +976,7 @@ export const DailyReport: React.FC<DailyReportProps> = ({
         date: today,
         notes,
         ai_summary: finalSummary,
-        tasks_snapshot: reportTasks,
+        tasks_snapshot: reportableTasks,
         total_tasks: stats.total,
         total_planned: stats.planned,
         total_actual: stats.actual,

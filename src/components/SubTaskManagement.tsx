@@ -52,7 +52,7 @@ export const SubTaskManagement: React.FC<SubTaskManagementProps> = ({ parentTask
   const [iconInput, setIconInput] = useState('');
   const [updateError, setUpdateError] = useState<string | null>(null);
 
-  // 定例テンプレート編集モーダルの状態。id=null は新規作成。
+  // 繰り返し作業編集モーダルの状態。id=null は新規作成。
   interface TemplateDraft {
     id: string | null;
     task_name: string;
@@ -148,9 +148,9 @@ export const SubTaskManagement: React.FC<SubTaskManagementProps> = ({ parentTask
   // 遅延シフト時の親期日延長などをスキップする目的で各所から参照する。
   const isMeetingParent = parentTask.type === 'meeting';
 
-  // 定例テンプレート（recurrence あり）と通常の実体タスクを分離。
-  //   - テンプレートは上部の「定例テンプレート」カード領域で管理（表に出さない）
-  //   - 実体タスク（自動生成された定例の当日分 + 単発タスク）は従来の表で管理
+  // 繰り返し作業テンプレート（recurrence あり）と通常の実体タスクを分離。
+  //   - テンプレートは上部の「繰り返し作業」カード領域で管理（表に出さない）
+  //   - 実体タスク（自動生成された繰り返し作業の当日分 + 単発タスク）は従来の表で管理
   // normal 親では templates が常に空なので entities === subTasks となり挙動不変。
   const templates = subTasks.filter(t => t.recurrence);
   const entities = subTasks.filter(t => !t.recurrence);
@@ -364,7 +364,7 @@ export const SubTaskManagement: React.FC<SubTaskManagementProps> = ({ parentTask
     });
   };
 
-  /* ===== 定例テンプレート ===== */
+  /* ===== 繰り返し作業 ===== */
 
   // 新規テンプレ作成モーダルを開く。
   const openNewTemplate = () => {
@@ -590,7 +590,7 @@ export const SubTaskManagement: React.FC<SubTaskManagementProps> = ({ parentTask
               <span className="truncate">{parentTask.name}</span>
               {isMeetingParent && (
                 <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-purple-100 text-purple-700 flex-shrink-0">
-                  定例
+                  繰り返し
                 </span>
               )}
             </h2>
@@ -612,10 +612,10 @@ export const SubTaskManagement: React.FC<SubTaskManagementProps> = ({ parentTask
             <button
               onClick={openNewTemplate}
               className="mac-button mac-button-secondary flex items-center gap-2"
-              title="毎日・毎週・毎月の定例作業を登録"
+              title="毎日・毎週・毎月の繰り返し作業を登録"
             >
               <Repeat size={18} />
-              <span>定例テンプレート追加</span>
+              <span>繰り返し作業追加</span>
             </button>
           )}
           <button
@@ -641,12 +641,12 @@ export const SubTaskManagement: React.FC<SubTaskManagementProps> = ({ parentTask
         </div>
       )}
 
-      {/* 定例テンプレート領域（会議集のみ）。実体タスク表とは別管理。 */}
+      {/* 繰り返し作業領域（会議集のみ）。実体タスク表とは別管理。 */}
       {isMeetingParent && templates.length > 0 && (
         <div className="mac-card p-4 lg:p-5">
           <div className="flex items-center gap-2 mb-3">
             <Repeat size={16} className="text-purple-600" />
-            <h3 className="text-sm font-bold text-[#1d1d1f]">定例テンプレート</h3>
+            <h3 className="text-sm font-bold text-[#1d1d1f]">繰り返し作業</h3>
             <span className="text-[10px] text-[#86868b]">
               該当日に当日分のタスクが自動生成されます
             </span>
@@ -995,7 +995,7 @@ export const SubTaskManagement: React.FC<SubTaskManagementProps> = ({ parentTask
         <div className="py-20 text-center">
           <p className="text-[#86868b] italic text-sm">
             {isMeetingParent
-              ? '実体タスクはありません。定例テンプレートを登録すると該当日に自動生成されます。'
+              ? '実体タスクはありません。繰り返し作業を登録すると該当日に自動生成されます。'
               : 'タスクが見つかりません。Excelからインポートするか、手動で追加してください。'}
           </p>
         </div>
@@ -1012,7 +1012,7 @@ export const SubTaskManagement: React.FC<SubTaskManagementProps> = ({ parentTask
         />
       )}
 
-      {/* 定例テンプレート 編集モーダル */}
+      {/* 繰り返し作業 編集モーダル */}
       {templateDraft && (
         <div
           className="fixed inset-0 bg-black/30 backdrop-blur-sm z-50 flex items-center justify-center p-4"
@@ -1027,7 +1027,7 @@ export const SubTaskManagement: React.FC<SubTaskManagementProps> = ({ parentTask
                 <Repeat size={18} />
               </div>
               <h3 className="text-base font-bold text-[#1d1d1f]">
-                {templateDraft.id ? '定例テンプレートを編集' : '定例テンプレートを追加'}
+                {templateDraft.id ? '繰り返し作業を編集' : '繰り返し作業を追加'}
               </h3>
             </div>
             <div className="flex-1 overflow-auto p-5 space-y-4">
