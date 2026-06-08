@@ -1124,6 +1124,20 @@ export const DailyReport: React.FC<DailyReportProps> = ({
               {t.task_name}
             </span>
           )}
+          {t.priority !== 'A' && t.remarks?.trim() && (
+            <button
+              type="button"
+              onClick={() => !isHistoryMode && openRemarksEdit(t)}
+              className={cn(
+                'inline-flex items-center justify-center w-5 h-5 rounded-md bg-amber-50 text-amber-700 border border-amber-100 flex-shrink-0',
+                !isHistoryMode && 'hover:bg-amber-100 hover:text-amber-800 transition-colors',
+              )}
+              title={`備考: ${t.remarks}`}
+              aria-label="備考あり"
+            >
+              <NotebookPen size={12} />
+            </button>
+          )}
           <select
             value={t.status}
             onChange={(e) => handleStatusChange(t.id, e.target.value as SubTaskStatus)}
