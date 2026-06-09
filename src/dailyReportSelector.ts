@@ -77,8 +77,8 @@ export const EXTRACT_CATEGORY_ORDER: ExtractCategory[] = [
 ];
 
 export const DISPLAY_CATEGORY_ORDER: DisplayCategory[] = [
-  ...EXTRACT_CATEGORY_ORDER,
   'remind',
+  ...EXTRACT_CATEGORY_ORDER,
 ];
 
 /* ============================================================

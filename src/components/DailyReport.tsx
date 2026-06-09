@@ -450,6 +450,9 @@ export const DailyReport: React.FC<DailyReportProps> = ({
         && matchesRecurrence(t.recurrence, tomorrow),
     );
   }, [allSubTasks, today, isHistoryMode, visibleParentMap]);
+  const recurringPreviewTasks = isHistoryMode
+    ? (snapshot?.recurring_preview_snapshot || [])
+    : tomorrowRecurring;
 
   // Source of truth for displayed tasks:
   //   - History mode: use the saved snapshot's tasks_snapshot
@@ -1014,6 +1017,7 @@ export const DailyReport: React.FC<DailyReportProps> = ({
         notes,
         ai_summary: finalSummary,
         tasks_snapshot: reportableTasks,
+        recurring_preview_snapshot: tomorrowRecurring,
         total_tasks: stats.total,
         total_planned: stats.planned,
         total_actual: stats.actual,
@@ -1654,8 +1658,8 @@ export const DailyReport: React.FC<DailyReportProps> = ({
         <div className="space-y-3">
           {CONFIRMED_CATEGORY_ORDER.map(cat => {
             const isRecurring = cat === 'recurring';
-            // 「定例作業」セクションは今日実体 + 明日予告（文言のみ）を合算して件数表示。
-            const tomorrowCount = isRecurring ? tomorrowRecurring.length : 0;
+            // 「繰り返し作業」セクションは今日実体 + 翌営業日予告（文言のみ）を合算して件数表示。
+            const tomorrowCount = isRecurring ? recurringPreviewTasks.length : 0;
             const todayCount = confirmedView.counts[cat];
             const count = todayCount + tomorrowCount;
             const isOpen = !collapsedConfirmedSections.has(cat);
@@ -1701,14 +1705,14 @@ export const DailyReport: React.FC<DailyReportProps> = ({
                       const tasks = confirmedView.byCategory[cat].get(pid) || [];
                       return renderProjectCard(parent, tasks, `confirmed::${cat}::${pid}`);
                     })}
-                    {/* 定例作業セクション末尾：明日の定例予告（実体化しない文言） */}
-                    {isRecurring && tomorrowRecurring.length > 0 && (
+                    {/* 繰り返し作業セクション末尾：翌営業日の予告（実体化しない文言） */}
+                    {isRecurring && recurringPreviewTasks.length > 0 && (
                       <div className="px-4 lg:px-5 py-3 bg-white space-y-1">
-                        {tomorrowRecurring.map(t => (
+                        {recurringPreviewTasks.map(t => (
                           <div key={t.id} className="flex items-center gap-2 text-xs lg:text-sm text-[#86868b]">
                             <Repeat size={13} className="text-purple-400 flex-shrink-0" />
                             <span>
-                              定例作業 <span className="font-medium text-[#1d1d1f]">{t.task_name}</span>　明日、着手する予定です。
+                              繰り返し作業 <span className="font-medium text-[#1d1d1f]">{t.task_name}</span>　明日、着手する予定です。
                             </span>
                           </div>
                         ))}

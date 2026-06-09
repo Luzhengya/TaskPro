@@ -177,6 +177,7 @@ export interface DailyReportSnapshot {
   notes: string;          // 本日のメモ
   ai_summary?: string;    // AI 生成总结
   tasks_snapshot: SubTask[]; // 当日所有 is_in_report 任务的快照
+  recurring_preview_snapshot?: SubTask[]; // 実体化しない翌営業日の繰り返し作業予告
   total_tasks: number;
   total_planned: number;
   total_actual: number;
