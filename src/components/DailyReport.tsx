@@ -473,19 +473,42 @@ export const DailyReport: React.FC<DailyReportProps> = ({
     [isHistoryMode, snapshot, allSubTasks, parentMap, today]
   );
 
+  const reportDate = isHistoryMode ? selectedDate : today;
+  const displayParentMap = useMemo(() => {
+    if (!isHistoryMode) return visibleParentMap;
+    const map = new Map(parentMap);
+    reportTasks.forEach(t => {
+      if (!map.has(t.parent_task_id)) {
+        map.set(t.parent_task_id, {
+          id: t.parent_task_id,
+          name: '(削除されたプロジェクト)',
+          deadline: '',
+          planned_hours: 0,
+          actual_hours: 0,
+          progress: 0,
+          is_hidden: true,
+          created_at: '',
+          updated_at: '',
+        });
+      }
+    });
+    return map;
+  }, [isHistoryMode, parentMap, reportTasks, visibleParentMap]);
   // 7 カテゴリ別 → 親プロジェクトごとにグルーピング（表示用）。
-  // リマインド bucket は **全アクティブタスクから異常検出** で別途集める（reportTasks 範囲外でも拾う）。
+  // リマインド bucket は当日表示のみ **全アクティブタスクから異常検出** で別途集める。
+  // 履歴表示では保存済み snapshot を読むだけで、異常検出は再実行しない。
   const categorized = useMemo(
-    // anomaly 検出も「業務対象の親 (visible)」のみで判定。履歴行きしたプロジェクトの
-    // 子タスクはリマインドにも上げない（業務対象から外したと解釈）。
-    () => buildDisplayData(reportTasks, allSubTasks, visibleParentMap, today),
-    [reportTasks, allSubTasks, visibleParentMap, today],
+    // 当日表示の anomaly 検出は「業務対象の親 (visible)」のみで判定。
+    () => buildDisplayData(reportTasks, isHistoryMode ? [] : allSubTasks, displayParentMap, reportDate),
+    [reportTasks, isHistoryMode, allSubTasks, displayParentMap, reportDate],
   );
 
   // 提出・集計・確定後 summary の対象。最終的に日報へ残った task からリマインド対象を除外する。
   const reportableTasks = useMemo(
-    () => reportTasks.filter(t => !categorized.anomalyCodes.has(t.id)),
-    [reportTasks, categorized.anomalyCodes],
+    () => isHistoryMode
+      ? reportTasks
+      : reportTasks.filter(t => !categorized.anomalyCodes.has(t.id)),
+    [isHistoryMode, reportTasks, categorized.anomalyCodes],
   );
 
   // 戻り先スクロール復元：
@@ -563,6 +586,20 @@ export const DailyReport: React.FC<DailyReportProps> = ({
 
   // Stats（リマインド対象タスクは集計から除外する。ユーザー要件：日報の件数には含めない）。
   const stats = useMemo(() => {
+    if (isHistoryMode && snapshot) {
+      const byPriority = { A: 0, B: 0, C: 0 };
+      for (const t of reportTasks) {
+        if (t.priority === 'A' || t.priority === 'B' || t.priority === 'C') byPriority[t.priority]++;
+      }
+      return {
+        total: snapshot.total_tasks,
+        planned: snapshot.total_planned,
+        actual: snapshot.total_actual,
+        delayed: snapshot.delayed_count,
+        byPriority,
+      };
+    }
+
     const totalPlanned = reportableTasks.reduce((sum, t) => sum + (t.planned_hours || 0), 0);
     const hasDiffBaseline = Object.keys(editSnapshot).length > 0;
     const totalActual = snapshot && !hasDiffBaseline
@@ -581,7 +618,7 @@ export const DailyReport: React.FC<DailyReportProps> = ({
       delayed,
       byPriority,
     };
-  }, [reportableTasks, editSnapshot, snapshot]);
+  }, [isHistoryMode, snapshot, reportTasks, reportableTasks, editSnapshot]);
 
   // 各カテゴリ内の親 ID を表示順（parent.order）でソートしたもの。
   const sortedParentIdsByCategory = useMemo(() => {
@@ -589,33 +626,33 @@ export const DailyReport: React.FC<DailyReportProps> = ({
     for (const cat of DISPLAY_CATEGORY_ORDER) {
       const ids = Array.from(categorized.byCategory[cat].keys());
       ids.sort((a, b) => {
-        const pa = parentMap.get(a);
-        const pb = parentMap.get(b);
+        const pa = displayParentMap.get(a);
+        const pb = displayParentMap.get(b);
         return (pa?.order ?? 0) - (pb?.order ?? 0);
       });
       result[cat] = ids;
     }
     return result;
-  }, [categorized, parentMap]);
+  }, [categorized, displayParentMap]);
 
   // 確定後ビュー（新カテゴリ 7 種類）。snapshot を参照して「完了」を判定。
   const confirmedView = useMemo(
-    () => buildConfirmedDisplayData(reportableTasks, editSnapshot, today),
-    [reportableTasks, editSnapshot, today],
+    () => buildConfirmedDisplayData(reportableTasks, editSnapshot, reportDate),
+    [reportableTasks, editSnapshot, reportDate],
   );
   const sortedConfirmedParentIdsByCategory = useMemo(() => {
     const result = {} as Record<ConfirmedCategory, string[]>;
     for (const cat of CONFIRMED_CATEGORY_ORDER) {
       const ids = Array.from(confirmedView.byCategory[cat].keys());
       ids.sort((a, b) => {
-        const pa = parentMap.get(a);
-        const pb = parentMap.get(b);
+        const pa = displayParentMap.get(a);
+        const pb = displayParentMap.get(b);
         return (pa?.order ?? 0) - (pb?.order ?? 0);
       });
       result[cat] = ids;
     }
     return result;
-  }, [confirmedView, parentMap]);
+  }, [confirmedView, displayParentMap]);
 
   // Group tasks by parent_task_id（既存ユーティリティとして残す。AI サマリー生成
   // など、カテゴリ非依存の処理で使われている）。
@@ -636,12 +673,12 @@ export const DailyReport: React.FC<DailyReportProps> = ({
   const parentIds = useMemo(() => {
     const ids = Array.from(groupedTasks.keys());
     ids.sort((a, b) => {
-      const pa = parentMap.get(a);
-      const pb = parentMap.get(b);
+      const pa = displayParentMap.get(a);
+      const pb = displayParentMap.get(b);
       return (pa?.order ?? 0) - (pb?.order ?? 0);
     });
     return ids;
-  }, [groupedTasks, parentMap]);
+  }, [groupedTasks, displayParentMap]);
 
   // Inline status change handler (disabled in history mode)
   const handleStatusChange = async (taskId: string, status: SubTaskStatus) => {
@@ -1005,7 +1042,7 @@ export const DailyReport: React.FC<DailyReportProps> = ({
     lines.push(`集計タスク: ${stats.total} 件 / 予定 ${stats.planned}h / 実績 ${stats.actual}h / 遅延 ${stats.delayed} 件`);
     lines.push('');
     parentIds.forEach(pid => {
-      const parent = parentMap.get(pid);
+      const parent = displayParentMap.get(pid);
       const tasks = groupedTasks.get(pid) || [];
       lines.push(`■ ${parent?.name || pid} (${tasks.length}件)`);
       tasks.forEach(t => {
@@ -1602,7 +1639,7 @@ export const DailyReport: React.FC<DailyReportProps> = ({
                 {isOpen && !isDisabled && (
                   <div className="border-t border-gray-100 divide-y divide-gray-100 bg-gray-50/30">
                     {ids.map(pid => {
-                      const parent = parentMap.get(pid);
+                      const parent = displayParentMap.get(pid);
                       const tasks = categorized.byCategory[cat].get(pid) || [];
                       return renderProjectCard(parent, tasks, `${cat}::${pid}`);
                     })}
@@ -1660,7 +1697,7 @@ export const DailyReport: React.FC<DailyReportProps> = ({
                 {isOpen && !isDisabled && (
                   <div className="border-t border-gray-100 divide-y divide-gray-100 bg-gray-50/30">
                     {ids.map(pid => {
-                      const parent = parentMap.get(pid);
+                      const parent = displayParentMap.get(pid);
                       const tasks = confirmedView.byCategory[cat].get(pid) || [];
                       return renderProjectCard(parent, tasks, `confirmed::${cat}::${pid}`);
                     })}
